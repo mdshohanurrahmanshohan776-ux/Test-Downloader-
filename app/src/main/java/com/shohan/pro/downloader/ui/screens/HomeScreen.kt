@@ -79,6 +79,10 @@ fun HomeScreen(
     onDismissClipboardBanner: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+    val canDrawOverlays = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        Settings.canDrawOverlays(context)
+    } else true
     var inputUrl by remember { mutableStateOf("") }
 
     LazyColumn(
@@ -179,83 +183,64 @@ fun HomeScreen(
             }
         }
 
-        // Instant Auto-Popup From Anywhere Control Card
-        item {
-            val context = LocalContext.current
-            val canDrawOverlays = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                Settings.canDrawOverlays(context)
-            } else true
-
-            PapiKingCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("everywhere_popup_card"),
-                contentPadding = 14.dp
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF0C2136)),
-                            contentAlignment = Alignment.Center
+        // Instant Auto-Popup Overlay Permission Card (shown ONLY if permission not yet granted)
+        if (!canDrawOverlays && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            item {
+                PapiKingCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("everywhere_popup_card"),
+                    contentPadding = 14.dp
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Bolt,
-                                contentDescription = null,
-                                tint = NeonCyan,
-                                modifier = Modifier.size(22.dp)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFF0C2136)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Bolt,
+                                    contentDescription = null,
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(10.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Enable Auto-Popup",
+                                    color = NeonCyan,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Pops up instantly when copying links in ANY app",
+                                    color = Color(0xFFFFB58D),
+                                    fontSize = 11.sp
+                                )
+                            }
                         }
 
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Everywhere Auto-Popup",
-                                color = NeonCyan,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Pops up instantly when copying links in ANY app",
-                                color = Color(0xFFFFB58D),
-                                fontSize = 11.sp
-                            )
-                        }
+                        Text(
+                            text = "অন্য যেকোনো অ্যাপ (ইউটিউব, ফেসবুক, ক্রোম ইত্যাদি) থেকে লিংক কপি করার সাথে সাথেই ডাউনলোড ডায়ালগ শো করার জন্য এই পারমিশনটি অন করুন।",
+                            color = TextMuted,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
 
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color(0xFF0C2136))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = "ACTIVE 🟢",
-                                color = Color(0xFF00FF7F),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Text(
-                        text = "ইউটিউব, ফেসবুক, ক্রোম বা যেকোনো অ্যাপে ভিডিও/ছবির লিংক কপি করার সাথে সাথেই আপনার স্ক্রিনের উপরে রেজুলেশন নির্বাচন ডায়ালগ স্বয়ংক্রিয়ভাবে পপ-আপ হবে।",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp
-                    )
-
-                    if (!canDrawOverlays && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         Spacer(modifier = Modifier.height(10.dp))
                         PapiKingButton(
-                            text = "Enable 'Display Over Other Apps'",
+                            text = "Grant 'Appear On Top' Permission",
                             onClick = {
                                 try {
                                     val intent = Intent(

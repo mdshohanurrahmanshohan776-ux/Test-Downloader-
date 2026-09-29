@@ -31,6 +31,28 @@ class MediaUrlInspector(
 
     suspend fun inspectUrl(url: String): AnalyzedMediaInfo = withContext(Dispatchers.IO) {
         val cleanUrl = url.trim()
+
+        // 1. If it's a social media URL (Facebook, Instagram, TikTok, etc.), extract video details
+        if (SocialMediaExtractor.isSocialMediaUrl(cleanUrl)) {
+            val extracted = SocialMediaExtractor.extractMedia(cleanUrl)
+            if (extracted != null) {
+                val category = extracted.category
+                val fileName = "${extracted.title}.${extracted.extension}"
+                val options = generateResolutionOptions(category, null)
+                val defaultOption = options.firstOrNull { it.isRecommended } ?: options.first()
+
+                return@withContext AnalyzedMediaInfo(
+                    originalUrl = cleanUrl,
+                    suggestedFileName = fileName,
+                    category = category,
+                    contentLength = null,
+                    mimeType = "video/mp4",
+                    resolutionOptions = options,
+                    defaultOption = defaultOption
+                )
+            }
+        }
+
         var mimeType: String? = null
         var contentLength: Long? = null
         var headerFileName: String? = null
@@ -76,36 +98,38 @@ class MediaUrlInspector(
     private fun detectCategory(url: String, mimeType: String?): MediaCategory {
         val lowerUrl = url.lowercase(Locale.ROOT)
 
+        // Known Video Platforms & Extensions ALWAYS have priority over mimeType
+        if (lowerUrl.contains("youtube.com") || lowerUrl.contains("youtu.be") ||
+            lowerUrl.contains("tiktok.com") || lowerUrl.contains("facebook.com") ||
+            lowerUrl.contains("fb.watch") || lowerUrl.contains("instagram.com/reel") ||
+            lowerUrl.contains("instagram.com/p/") || lowerUrl.contains("twitter.com") ||
+            lowerUrl.contains("x.com") || lowerUrl.contains("vimeo.com") ||
+            lowerUrl.contains("dailymotion.com") || lowerUrl.endsWith(".mp4") ||
+            lowerUrl.endsWith(".mkv") || lowerUrl.endsWith(".webm") ||
+            lowerUrl.endsWith(".mov") || lowerUrl.endsWith(".avi") ||
+            lowerUrl.endsWith(".m4v") || lowerUrl.endsWith(".flv") ||
+            lowerUrl.contains(".mp4?") || lowerUrl.contains(".m3u8")
+        ) {
+            return MediaCategory.VIDEO
+        }
+
         if (mimeType != null) {
             when {
                 mimeType.startsWith("video/") -> return MediaCategory.VIDEO
                 mimeType.startsWith("image/") -> return MediaCategory.IMAGE
                 mimeType.startsWith("audio/") -> return MediaCategory.AUDIO
                 mimeType.contains("pdf") || mimeType.contains("msword") ||
-                        mimeType.contains("officedocument") || mimeType.contains("text/") -> return MediaCategory.DOCUMENT
+                        mimeType.contains("officedocument") || mimeType == "application/pdf" -> return MediaCategory.DOCUMENT
                 mimeType.contains("zip") || mimeType.contains("compressed") ||
                         mimeType.contains("tar") || mimeType.contains("rar") -> return MediaCategory.ARCHIVE
             }
-        }
-
-        // Known Video Platforms & Extensions
-        if (lowerUrl.contains("youtube.com") || lowerUrl.contains("youtu.be") ||
-            lowerUrl.contains("tiktok.com") || lowerUrl.contains("facebook.com") ||
-            lowerUrl.contains("fb.watch") || lowerUrl.contains("instagram.com/reel") ||
-            lowerUrl.contains("twitter.com") || lowerUrl.contains("x.com") ||
-            lowerUrl.contains("vimeo.com") || lowerUrl.contains("dailymotion.com") ||
-            lowerUrl.endsWith(".mp4") || lowerUrl.endsWith(".mkv") || lowerUrl.endsWith(".webm") ||
-            lowerUrl.endsWith(".mov") || lowerUrl.endsWith(".avi") || lowerUrl.endsWith(".m4v") ||
-            lowerUrl.endsWith(".flv") || lowerUrl.contains(".mp4?") || lowerUrl.contains(".m3u8")
-        ) {
-            return MediaCategory.VIDEO
         }
 
         // Images
         if (lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg") || lowerUrl.endsWith(".png") ||
             lowerUrl.endsWith(".webp") || lowerUrl.endsWith(".gif") || lowerUrl.endsWith(".svg") ||
             lowerUrl.endsWith(".bmp") || lowerUrl.contains("unsplash.com") || lowerUrl.contains("imgur.com") ||
-            lowerUrl.contains("pinterest.com") || lowerUrl.contains("instagram.com/p/")
+            lowerUrl.contains("pinterest.com")
         ) {
             return MediaCategory.IMAGE
         }

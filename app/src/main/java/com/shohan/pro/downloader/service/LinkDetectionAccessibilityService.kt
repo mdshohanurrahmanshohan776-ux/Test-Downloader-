@@ -4,7 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.ClipboardManager
 import android.content.Context
 import android.view.accessibility.AccessibilityEvent
-import com.shohan.pro.downloader.ui.FloatingDownloadActivity
+import com.shohan.pro.downloader.ui.FloatingOverlayManager
 import com.shohan.pro.downloader.util.ClipboardHelper
 
 class LinkDetectionAccessibilityService : AccessibilityService() {
@@ -20,17 +20,17 @@ class LinkDetectionAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
 
-        // Check clipboard directly as accessibility service has full permission to read clipboard on Android 10-14
+        // 1. Accessibility service has full system-level permission to read clipboard on Android 10-15
         try {
             val clipUrl = ClipboardHelper.getClipboardUrl(this)
             if (!clipUrl.isNullOrBlank() && clipUrl != lastProcessedUrl) {
                 lastProcessedUrl = clipUrl
-                FloatingDownloadActivity.start(this, clipUrl)
+                FloatingOverlayManager.showFloatingDialog(this, clipUrl)
                 return
             }
         } catch (_: Exception) {}
 
-        // Also inspect text selection / change events
+        // 2. Also inspect text selection / change events across apps
         val textList = event.text
         if (textList != null && textList.isNotEmpty()) {
             for (charSeq in textList) {
@@ -38,7 +38,7 @@ class LinkDetectionAccessibilityService : AccessibilityService() {
                 val extracted = ClipboardHelper.extractUrl(str)
                 if (extracted != null && extracted != lastProcessedUrl) {
                     lastProcessedUrl = extracted
-                    FloatingDownloadActivity.start(this, extracted)
+                    FloatingOverlayManager.showFloatingDialog(this, extracted)
                     break
                 }
             }

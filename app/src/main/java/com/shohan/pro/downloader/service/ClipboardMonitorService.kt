@@ -13,35 +13,49 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.shohan.pro.downloader.MainActivity
 import com.shohan.pro.downloader.R
-import com.shohan.pro.downloader.ui.FloatingDownloadActivity
+import com.shohan.pro.downloader.ui.FloatingOverlayManager
 import com.shohan.pro.downloader.util.ClipboardHelper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ClipboardMonitorService : Service() {
 
     companion object {
-        const val CHANNEL_ID = "clipboard_monitor_channel"
+        const val CHANNEL_ID = "clipboard_monitor_channel_silent"
         const val POPUP_NOTIFICATION_CHANNEL = "instant_download_popup_channel"
         private const val MONITOR_NOTIFICATION_ID = 3001
         private const val POPUP_NOTIFICATION_ID = 3002
 
         fun start(context: Context) {
             val intent = Intent(context, ClipboardMonitorService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (_: Exception) {}
         }
 
         fun stop(context: Context) {
             val intent = Intent(context, ClipboardMonitorService::class.java)
-            context.stopService(intent)
+            try {
+                context.stopService(intent)
+            } catch (_: Exception) {}
         }
     }
 
     private var clipboardManager: ClipboardManager? = null
     private var lastCopiedUrl: String? = null
     private lateinit var notificationManager: NotificationManager
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var pollingJob: Job? = null
 
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
         checkClipboardForLink()
@@ -57,7 +71,7 @@ class ClipboardMonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = createMonitorNotification()
+        val notification = createSilentMonitorNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 MONITOR_NOTIFICATION_ID,
@@ -68,31 +82,50 @@ class ClipboardMonitorService : Service() {
             startForeground(MONITOR_NOTIFICATION_ID, notification)
         }
 
+        // Hide foreground notification from the top status bar as requested:
+        // Background service continues running, but notification is removed from tray.
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {}
+
+        startClipboardPolling()
         checkClipboardForLink()
         return START_STICKY
     }
 
-    private fun checkClipboardForLink() {
-        val url = ClipboardHelper.getClipboardUrl(this)
-        if (!url.isNullOrBlank() && url != lastCopiedUrl) {
-            lastCopiedUrl = url
-            onLinkDetectedEverywhere(url)
+    private fun startClipboardPolling() {
+        pollingJob?.cancel()
+        pollingJob = serviceScope.launch {
+            while (isActive) {
+                withContext(Dispatchers.Main) {
+                    checkClipboardForLink()
+                }
+                delay(800)
+            }
         }
     }
 
-    private fun onLinkDetectedEverywhere(url: String) {
-        // 1. Launch the Floating Dialog Activity immediately on top of the screen!
+    private fun checkClipboardForLink() {
         try {
-            FloatingDownloadActivity.start(this, url)
+            val url = ClipboardHelper.getClipboardUrl(this)
+            if (!url.isNullOrBlank() && url != lastCopiedUrl) {
+                lastCopiedUrl = url
+                onLinkDetectedEverywhere(url)
+            }
         } catch (_: Exception) {}
+    }
 
-        // 2. Also trigger a High Priority Heads-up notification for instant 1-tap download
+    private fun onLinkDetectedEverywhere(url: String) {
+        // Pop up the Floating Download Dialog directly over whatever app the user is on!
+        FloatingOverlayManager.showFloatingDialog(this, url)
+
+        // Also trigger high priority heads-up notification in case overlays are waiting for click
         showInstantDownloadNotification(url)
     }
 
     private fun showInstantDownloadNotification(url: String) {
-        val dialogIntent = Intent(this, FloatingDownloadActivity::class.java).apply {
-            putExtra(FloatingDownloadActivity.EXTRA_URL, url)
+        val dialogIntent = Intent(this, com.shohan.pro.downloader.ui.FloatingDownloadActivity::class.java).apply {
+            putExtra(com.shohan.pro.downloader.ui.FloatingDownloadActivity.EXTRA_URL, url)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pendingIntent = PendingIntent.getActivity(
@@ -118,7 +151,7 @@ class ClipboardMonitorService : Service() {
         } catch (_: SecurityException) {}
     }
 
-    private fun createMonitorNotification(): android.app.Notification {
+    private fun createSilentMonitorNotification(): android.app.Notification {
         val appIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -129,31 +162,35 @@ class ClipboardMonitorService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Auto Link Detector Active")
-            .setContentText("Copy any video/photo/doc link to immediately pop up download dialog")
+            .setContentTitle("Link Downloader")
+            .setContentText("Active")
             .setContentIntent(pendingIntent)
-            .setOngoing(true)
+            .setOngoing(false)
             .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setSilent(true)
             .build()
     }
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val monitorChannel = NotificationChannel(
+            val silentChannel = NotificationChannel(
                 CHANNEL_ID,
-                getString(R.string.clipboard_service_channel_name),
-                NotificationManager.IMPORTANCE_LOW
+                "Background Link Detection",
+                NotificationManager.IMPORTANCE_MIN
             ).apply {
-                description = getString(R.string.clipboard_service_channel_desc)
+                description = "Silent background link detector"
+                setShowBadge(false)
+                enableLights(false)
+                enableVibration(false)
             }
-            notificationManager.createNotificationChannel(monitorChannel)
+            notificationManager.createNotificationChannel(silentChannel)
 
             val popupChannel = NotificationChannel(
                 POPUP_NOTIFICATION_CHANNEL,
                 "Instant Download Popups",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "High priority popups when any media link is copied"
+                description = "Popups when any media link is copied"
                 enableVibration(true)
             }
             notificationManager.createNotificationChannel(popupChannel)
@@ -162,6 +199,7 @@ class ClipboardMonitorService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        pollingJob?.cancel()
         clipboardManager?.removePrimaryClipChangedListener(clipListener)
     }
 

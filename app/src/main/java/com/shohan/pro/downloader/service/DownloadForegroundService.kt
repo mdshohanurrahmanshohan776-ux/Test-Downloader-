@@ -16,6 +16,7 @@ import com.shohan.pro.downloader.R
 import com.shohan.pro.downloader.data.db.AppDatabase
 import com.shohan.pro.downloader.data.model.DownloadItem
 import com.shohan.pro.downloader.data.model.DownloadStatus
+import com.shohan.pro.downloader.data.network.SocialMediaExtractor
 import com.shohan.pro.downloader.data.repository.DownloadRepository
 import com.shohan.pro.downloader.util.FileOpener
 import kotlin.coroutines.coroutineContext
@@ -185,11 +186,28 @@ class DownloadForegroundService : Service() {
                 downloadDir.mkdirs()
             }
 
-            val safeName = item.fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            val isSocial = SocialMediaExtractor.isSocialMediaUrl(item.url)
+            val effectiveUrl = if (isSocial) {
+                try {
+                    SocialMediaExtractor.extractMedia(item.url)?.directUrl ?: item.url
+                } catch (_: Exception) {
+                    item.url
+                }
+            } else {
+                item.url
+            }
+
+            val adjustedName = if (isSocial && item.fileName.endsWith(".pdf", ignoreCase = true)) {
+                item.fileName.substringBeforeLast('.') + ".mp4"
+            } else {
+                item.fileName
+            }
+
+            val safeName = adjustedName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
             targetFile = File(downloadDir, safeName)
 
             val requestBuilder = Request.Builder()
-                .url(item.url)
+                .url(effectiveUrl)
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
 
             if (targetFile.exists() && targetFile.length() > 0 && downloadedBytes > 0) {
