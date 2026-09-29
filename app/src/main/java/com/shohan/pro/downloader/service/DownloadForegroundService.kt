@@ -166,6 +166,7 @@ class DownloadForegroundService : Service() {
             currentItem = nextItem
             downloadSingleItem(nextItem)
 
+            kotlinx.coroutines.delay(400)
             // Loop to the next item in the queue
             processNextInQueue()
         }
@@ -275,8 +276,14 @@ class DownloadForegroundService : Service() {
             inputStream.close()
 
             if (coroutineContext.isActive) {
-                repository.markCompleted(id, targetFile.absolutePath, downloadedBytes)
-                showCompletionNotification(id, item.fileName, targetFile)
+                val isHtml = isHtmlPayload(targetFile)
+                if (isHtml && item.category == "VIDEO") {
+                    targetFile.delete()
+                    repository.markFailed(id, "Video stream protected. Please use direct video link.")
+                } else {
+                    repository.markCompleted(id, targetFile.absolutePath, downloadedBytes)
+                    showCompletionNotification(id, item.fileName, targetFile)
+                }
             }
 
         } catch (e: CancellationException) {
@@ -397,6 +404,24 @@ class DownloadForegroundService : Service() {
             gb >= 1.0 -> String.format(Locale.US, "%.1f GB", gb)
             mb >= 1.0 -> String.format(Locale.US, "%.1f MB", mb)
             else -> String.format(Locale.US, "%.0f KB", kb)
+        }
+    }
+
+    private fun isHtmlPayload(file: File): Boolean {
+        if (!file.exists() || file.length() == 0L) return true
+        if (file.length() > 500 * 1024) return false
+        return try {
+            val headerBytes = ByteArray(1024)
+            file.inputStream().use { stream ->
+                val read = stream.read(headerBytes)
+                if (read > 0) {
+                    val content = String(headerBytes, 0, read).lowercase(Locale.ROOT)
+                    content.contains("<!doctype html") || content.contains("<html") ||
+                            content.contains("<head") || content.contains("<body")
+                } else false
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 

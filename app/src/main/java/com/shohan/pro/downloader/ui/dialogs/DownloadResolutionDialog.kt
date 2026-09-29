@@ -66,12 +66,36 @@ fun DownloadResolutionDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        PapiKingCard(
-            modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .testTag("download_resolution_dialog"),
-            contentPadding = 18.dp
-        ) {
+        DownloadResolutionContent(
+            mediaInfo = mediaInfo,
+            selectedOption = selectedOption,
+            fileName = fileName,
+            onFileNameChange = onFileNameChange,
+            onOptionSelected = onOptionSelected,
+            onDownloadNow = onDownloadNow,
+            onAddToQueue = onAddToQueue,
+            onDismiss = onDismiss
+        )
+    }
+}
+
+@Composable
+fun DownloadResolutionContent(
+    mediaInfo: AnalyzedMediaInfo,
+    selectedOption: ResolutionOption?,
+    fileName: String,
+    onFileNameChange: (String) -> Unit,
+    onOptionSelected: (ResolutionOption) -> Unit,
+    onDownloadNow: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    PapiKingCard(
+        modifier = Modifier
+            .fillMaxWidth(0.95f)
+            .testTag("download_resolution_dialog"),
+        contentPadding = 18.dp
+    ) {
             Column(
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -292,4 +316,3 @@ fun DownloadResolutionDialog(
             }
         }
     }
-}

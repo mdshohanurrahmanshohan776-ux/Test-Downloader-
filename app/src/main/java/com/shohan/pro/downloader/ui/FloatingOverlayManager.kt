@@ -34,7 +34,8 @@ import com.shohan.pro.downloader.data.model.DownloadStatus
 import com.shohan.pro.downloader.data.model.ResolutionOption
 import com.shohan.pro.downloader.data.network.MediaUrlInspector
 import com.shohan.pro.downloader.service.DownloadForegroundService
-import com.shohan.pro.downloader.ui.dialogs.DownloadResolutionDialog
+import androidx.compose.ui.Alignment
+import com.shohan.pro.downloader.ui.dialogs.DownloadResolutionContent
 import com.shohan.pro.downloader.ui.theme.LinkDownloaderTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -135,10 +136,11 @@ object FloatingOverlayManager {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.65f))
+                            .background(Color.Black.copy(alpha = 0.65f)),
+                        contentAlignment = Alignment.Center
                     ) {
                         if (analyzedMedia != null) {
-                            DownloadResolutionDialog(
+                            DownloadResolutionContent(
                                 mediaInfo = analyzedMedia!!,
                                 selectedOption = selectedOption,
                                 fileName = customFileName,

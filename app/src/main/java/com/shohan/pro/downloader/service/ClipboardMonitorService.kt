@@ -8,8 +8,13 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.shohan.pro.downloader.MainActivity
 import com.shohan.pro.downloader.R
@@ -56,6 +61,8 @@ class ClipboardMonitorService : Service() {
     private lateinit var notificationManager: NotificationManager
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
+    private var dummyOverlayView: View? = null
+    private var windowManager: WindowManager? = null
 
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
         checkClipboardForLink()
@@ -83,14 +90,55 @@ class ClipboardMonitorService : Service() {
         }
 
         // Hide foreground notification from the top status bar as requested:
-        // Background service continues running, but notification is removed from tray.
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (_: Exception) {}
 
+        // Ensure 1x1 overlay window for background clipboard access on Android 10-15
+        ensureWindowFocusOverlay()
+
         startClipboardPolling()
         checkClipboardForLink()
         return START_STICKY
+    }
+
+    private fun ensureWindowFocusOverlay() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
+            if (dummyOverlayView == null) {
+                try {
+                    windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                    val view = View(this)
+                    val params = WindowManager.LayoutParams(
+                        1, 1,
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        } else {
+                            @Suppress("DEPRECATION")
+                            WindowManager.LayoutParams.TYPE_PHONE
+                        },
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.TOP or Gravity.START
+                        x = 0
+                        y = 0
+                    }
+                    windowManager?.addView(view, params)
+                    dummyOverlayView = view
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun removeWindowFocusOverlay() {
+        dummyOverlayView?.let { view ->
+            try {
+                windowManager?.removeView(view)
+            } catch (_: Exception) {}
+            dummyOverlayView = null
+        }
     }
 
     private fun startClipboardPolling() {
@@ -200,6 +248,7 @@ class ClipboardMonitorService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         pollingJob?.cancel()
+        removeWindowFocusOverlay()
         clipboardManager?.removePrimaryClipChangedListener(clipListener)
     }
 
