@@ -21,6 +21,16 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Locale
+import java.util.UUID
+
+data class CopiedLinkItem(
+    val id: String = UUID.randomUUID().toString(),
+    val url: String,
+    val platformName: String,
+    val category: MediaCategory,
+    val timestamp: Long = System.currentTimeMillis()
+)
 
 class MainViewModel(
     private val repository: DownloadRepository,
@@ -42,10 +52,11 @@ class MainViewModel(
     private val _customFileName = MutableStateFlow("")
     val customFileName: StateFlow<String> = _customFileName.asStateFlow()
 
-    private val _detectedClipboardUrl = MutableStateFlow<String?>(null)
-    val detectedClipboardUrl: StateFlow<String?> = _detectedClipboardUrl.asStateFlow()
+    private val _copiedLinks = MutableStateFlow<List<CopiedLinkItem>>(emptyList())
+    val copiedLinks: StateFlow<List<CopiedLinkItem>> = _copiedLinks.asStateFlow()
 
-    private var lastHandledClipboardUrl: String? = null
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
     // Queue list
     val queueItems: StateFlow<List<DownloadItem>> = repository.queueDownloads
@@ -69,25 +80,45 @@ class MainViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun checkClipboard(context: Context, force: Boolean = false) {
+    fun checkClipboard(context: Context) {
         val url = ClipboardHelper.getClipboardUrl(context)
-        if (url != null) {
-            _detectedClipboardUrl.value = url
-            if (force || url != lastHandledClipboardUrl) {
-                lastHandledClipboardUrl = url
-                analyzeUrl(url)
-            }
+        if (!url.isNullOrBlank()) {
+            addCopiedLink(url)
         }
     }
 
-    fun dismissClipboardBanner() {
-        _detectedClipboardUrl.value = null
+    fun addCopiedLink(rawUrl: String) {
+        val clean = rawUrl.trim()
+        if (clean.isBlank()) return
+        val current = _copiedLinks.value
+        if (current.any { it.url == clean }) return
+
+        val (platform, category) = detectPlatformAndCategory(clean)
+        val newItem = CopiedLinkItem(
+            url = clean,
+            platformName = platform,
+            category = category
+        )
+        _copiedLinks.value = listOf(newItem) + current.take(15)
+    }
+
+    fun removeCopiedLink(id: String) {
+        _copiedLinks.value = _copiedLinks.value.filterNot { it.id == id }
+    }
+
+    fun clearAllCopiedLinks() {
+        _copiedLinks.value = emptyList()
+    }
+
+    fun clearErrorMessage() {
+        _errorMessage.value = null
     }
 
     fun analyzeUrl(url: String) {
         if (url.isBlank()) return
         viewModelScope.launch {
             _isAnalyzing.value = true
+            _errorMessage.value = null
             try {
                 val mediaInfo = inspector.inspectUrl(url)
                 _analyzedMedia.value = mediaInfo
@@ -95,29 +126,9 @@ class MainViewModel(
                 _customFileName.value = mediaInfo.suggestedFileName
                 _showResolutionDialog.value = true
             } catch (e: Exception) {
-                // In case of error still show dialog with sensible defaults
-                val fallbackCategory = MediaCategory.OTHER
-                val fallbackOption = ResolutionOption(
-                    id = "standard",
-                    label = "Standard Download",
-                    resolution = "Default",
-                    estimatedSize = "Direct Stream",
-                    format = "File",
-                    isRecommended = true
-                )
-                val fallbackInfo = AnalyzedMediaInfo(
-                    originalUrl = url,
-                    suggestedFileName = "download_${System.currentTimeMillis() % 10000}",
-                    category = fallbackCategory,
-                    contentLength = null,
-                    mimeType = null,
-                    resolutionOptions = listOf(fallbackOption),
-                    defaultOption = fallbackOption
-                )
-                _analyzedMedia.value = fallbackInfo
-                _selectedOption.value = fallbackOption
-                _customFileName.value = fallbackInfo.suggestedFileName
-                _showResolutionDialog.value = true
+                _analyzedMedia.value = null
+                _showResolutionDialog.value = false
+                _errorMessage.value = e.message ?: "ভিডিও খুঁজে পাওয়া যায়নি বা লিঙ্কটি সুরক্ষিত।"
             } finally {
                 _isAnalyzing.value = false
             }
@@ -246,6 +257,23 @@ class MainViewModel(
             )
             repository.insertDownload(newItem)
             DownloadForegroundService.startQueue(context)
+        }
+    }
+
+    private fun detectPlatformAndCategory(url: String): Pair<String, MediaCategory> {
+        val lower = url.lowercase(Locale.ROOT)
+        return when {
+            lower.contains("facebook.com") || lower.contains("fb.watch") -> "Facebook" to MediaCategory.VIDEO
+            lower.contains("instagram.com") -> "Instagram" to MediaCategory.VIDEO
+            lower.contains("tiktok.com") -> "TikTok" to MediaCategory.VIDEO
+            lower.contains("youtube.com") || lower.contains("youtu.be") -> "YouTube" to MediaCategory.VIDEO
+            lower.contains("twitter.com") || lower.contains("x.com") -> "Twitter / X" to MediaCategory.VIDEO
+            lower.contains("pinterest.com") -> "Pinterest" to MediaCategory.IMAGE
+            lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".webm") || lower.endsWith(".mov") -> "Video File" to MediaCategory.VIDEO
+            lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".m4a") || lower.endsWith(".aac") -> "Audio File" to MediaCategory.AUDIO
+            lower.endsWith(".pdf") || lower.endsWith(".doc") || lower.endsWith(".docx") -> "Document" to MediaCategory.DOCUMENT
+            lower.endsWith(".apk") || lower.endsWith(".zip") || lower.endsWith(".rar") -> "Archive / App" to MediaCategory.OTHER
+            else -> "Web File / Link" to MediaCategory.OTHER
         }
     }
 

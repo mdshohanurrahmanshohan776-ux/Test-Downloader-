@@ -15,9 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,16 +23,6 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Link
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.ui.platform.LocalContext
-import com.shohan.pro.downloader.service.ClipboardMonitorService
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -57,6 +44,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.shohan.pro.downloader.ui.CopiedLinkItem
 import com.shohan.pro.downloader.ui.components.PapiKingButton
 import com.shohan.pro.downloader.ui.components.PapiKingCard
 import com.shohan.pro.downloader.ui.theme.BrandNavyDark
@@ -69,20 +57,17 @@ import com.shohan.pro.downloader.util.ClipboardHelper
 
 @Composable
 fun HomeScreen(
-    detectedClipboardUrl: String?,
+    copiedLinks: List<CopiedLinkItem>,
     isAnalyzing: Boolean,
     queueCount: Int,
     historyCount: Int,
     onAnalyzeUrl: (String) -> Unit,
+    onRemoveCopiedLink: (String) -> Unit,
+    onClearAllCopiedLinks: () -> Unit,
     onNavigateToQueue: () -> Unit,
-    onNavigateToHistory: () -> Unit,
-    onDismissClipboardBanner: () -> Unit
+    onNavigateToHistory: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
-    val context = LocalContext.current
-    val canDrawOverlays = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        Settings.canDrawOverlays(context)
-    } else true
     var inputUrl by remember { mutableStateOf("") }
 
     LazyColumn(
@@ -126,7 +111,7 @@ fun HomeScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Auto clipboard detection & custom resolution",
+                                text = "Fast media & file downloader with custom quality",
                                 color = NeonCoral,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
@@ -183,90 +168,14 @@ fun HomeScreen(
             }
         }
 
-        // Instant Auto-Popup Overlay Permission Card (shown ONLY if permission not yet granted)
-        if (!canDrawOverlays && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        // Serial Copied Links Shelf (Shown ABOVE the empty input box)
+        if (copiedLinks.isNotEmpty()) {
             item {
                 PapiKingCard(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("everywhere_popup_card"),
+                        .testTag("copied_links_card"),
                     contentPadding = 14.dp
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFF0C2136)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Bolt,
-                                    contentDescription = null,
-                                    tint = NeonCyan,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(10.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Enable Auto-Popup",
-                                    color = NeonCyan,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "Pops up instantly when copying links in ANY app",
-                                    color = Color(0xFFFFB58D),
-                                    fontSize = 11.sp
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        Text(
-                            text = "অন্য যেকোনো অ্যাপ (ইউটিউব, ফেসবুক, ক্রোম ইত্যাদি) থেকে লিংক কপি করার সাথে সাথেই ডাউনলোড ডায়ালগ শো করার জন্য এই পারমিশনটি অন করুন।",
-                            color = TextMuted,
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(10.dp))
-                        PapiKingButton(
-                            text = "Grant 'Appear On Top' Permission",
-                            onClick = {
-                                try {
-                                    val intent = Intent(
-                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                        Uri.parse("package:${context.packageName}")
-                                    )
-                                    context.startActivity(intent)
-                                } catch (_: Exception) {}
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            icon = Icons.Default.Settings,
-                            testTag = "enable_overlay_button"
-                        )
-                    }
-                }
-            }
-        }
-
-        // Live Clipboard Detection Banner (if a link was copied)
-        if (!detectedClipboardUrl.isNullOrBlank()) {
-            item {
-                PapiKingCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("clipboard_detected_banner"),
-                    contentPadding = 12.dp
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Row(
@@ -277,54 +186,45 @@ fun HomeScreen(
                                 imageVector = Icons.Default.ContentPaste,
                                 contentDescription = null,
                                 tint = NeonCyan,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Copied Link Detected!",
+                                text = "কপি করা লিংকসমূহ (${copiedLinks.size})",
                                 color = NeonCyan,
-                                fontSize = 14.sp,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.weight(1f))
-                            IconButton(
-                                onClick = onDismissClipboardBanner,
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Clear,
-                                    contentDescription = "Dismiss",
-                                    tint = TextMuted,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
+                            Text(
+                                text = "Clear All",
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                                modifier = Modifier
+                                    .clickable { onClearAllCopiedLinks() }
+                                    .padding(4.dp)
+                            )
                         }
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        Text(
-                            text = detectedClipboardUrl,
-                            color = TextWhite,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        PapiKingButton(
-                            text = "Download With Resolution Dialog",
-                            onClick = { onAnalyzeUrl(detectedClipboardUrl) },
-                            modifier = Modifier.fillMaxWidth(),
-                            isLoading = isAnalyzing,
-                            testTag = "clipboard_banner_download_button"
-                        )
+                        copiedLinks.forEachIndexed { index, item ->
+                            CopiedLinkRowItem(
+                                index = index + 1,
+                                item = item,
+                                onDownload = { onAnalyzeUrl(item.url) },
+                                onDismiss = { onRemoveCopiedLink(item.id) }
+                            )
+                            if (index < copiedLinks.size - 1) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // URL Input Card
+        // Empty URL Input Card
         item {
             PapiKingCard(
                 modifier = Modifier
@@ -339,7 +239,7 @@ fun HomeScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Supports Video, Image, Audio, Document, Archive, etc.",
+                        text = "Supports Facebook, Instagram, TikTok, Video, Audio, Docs",
                         color = TextMuted,
                         fontSize = 12.sp
                     )
@@ -353,7 +253,7 @@ fun HomeScreen(
                             .fillMaxWidth()
                             .testTag("home_url_input"),
                         placeholder = {
-                            Text("https://... (video, photo, doc link)", color = TextMuted, fontSize = 13.sp)
+                            Text("https://... (video, audio, or file link)", color = TextMuted, fontSize = 13.sp)
                         },
                         leadingIcon = {
                             Icon(
@@ -448,37 +348,24 @@ fun HomeScreen(
 
                     val categories = listOf(
                         Triple("Videos", "🎬 4K, 2K, 1080p, 720p, 480p, 360p", "MP4 / MKV"),
-                        Triple("Images", "🖼️ Original HD, 1080p, 720p, Thumb", "JPG / PNG / WebP"),
-                        Triple("Documents", "📄 PDF, DOCX, XLSX, TXT, PPT", "Full & Stream"),
-                        Triple("Audio", "🎵 320 kbps, 192 kbps, 128 kbps", "MP3 Extract"),
-                        Triple("Archives", "📦 ZIP, RAR, 7Z, APK, TAR.GZ", "High Speed")
+                        Triple("Audios", "🎵 320kbps, 256kbps, 192kbps, 128kbps", "MP3 / M4A"),
+                        Triple("Photos", "🖼️ Full HD & Original Quality", "JPG / PNG / WEBP"),
+                        Triple("Files & Docs", "📦 PDF, ZIP, APK, Docs, Archives", "Any Format")
                     )
 
-                    categories.forEach { (title, desc, format) ->
+                    categories.forEach { (title, desc, formats) ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 5.dp),
+                                .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = desc.substringBefore(' '),
-                                fontSize = 18.sp
+                                text = desc,
+                                color = TextWhite,
+                                fontSize = 12.sp,
+                                modifier = Modifier.weight(1f)
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = title,
-                                    color = TextWhite,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = desc.substringAfter(' '),
-                                    color = TextMuted,
-                                    fontSize = 11.sp
-                                )
-                            }
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(4.dp))
@@ -486,8 +373,8 @@ fun HomeScreen(
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
                                 Text(
-                                    text = format,
-                                    color = NeonGold,
+                                    text = formats,
+                                    color = NeonCyan,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -498,43 +385,123 @@ fun HomeScreen(
             }
         }
 
-        // Features Highlight Card
         item {
-            PapiKingCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("features_card"),
-                contentPadding = 14.dp
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Speed,
-                            contentDescription = null,
-                            tint = NeonGold,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Background Download Engine",
-                            color = NeonGold,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
 
-                    Spacer(modifier = Modifier.height(6.dp))
+@Composable
+fun CopiedLinkRowItem(
+    index: Int,
+    item: CopiedLinkItem,
+    onDownload: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val platformColor = when (item.platformName) {
+        "Facebook" -> Color(0xFF1877F2)
+        "Instagram" -> Color(0xFFE1306C)
+        "YouTube" -> Color(0xFFFF3333)
+        "TikTok" -> Color(0xFF00F2FE)
+        "Twitter / X" -> Color(0xFF1DA1F2)
+        "Pinterest" -> Color(0xFFBD081C)
+        "Audio File" -> Color(0xFF00E676)
+        "Video File" -> Color(0xFFFF6D00)
+        "Document" -> Color(0xFFFFD600)
+        else -> NeonCyan
+    }
 
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF0A1B2D))
+            .border(1.dp, Color(0xFF163E63), RoundedCornerShape(8.dp))
+            .padding(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "$index.",
+                color = TextMuted,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                // Platform tag pill
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(platformColor.copy(alpha = 0.2f))
+                        .border(1.dp, platformColor, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
                     Text(
-                        text = "• Sequential Queue: downloads files one-by-one with custom priority reordering.\n• Background Processing: continues downloading when screen is locked or in other apps.\n• Smart Auto-Detection: copy any link and open the app for instant resolution dialog.",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp
+                        text = item.platformName,
+                        color = platformColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = item.url,
+                    color = TextWhite,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Prominent Download button
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFFFF5722))
+                    .clickable { onDownload() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Download",
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "ডাউনলোড",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Remove button
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.size(24.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Clear,
+                    contentDescription = "Remove",
+                    tint = TextMuted,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }

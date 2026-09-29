@@ -42,14 +42,16 @@ class MediaUrlInspector(
                 val defaultOption = options.firstOrNull { it.isRecommended } ?: options.first()
 
                 return@withContext AnalyzedMediaInfo(
-                    originalUrl = cleanUrl,
+                    originalUrl = extracted.directUrl,
                     suggestedFileName = fileName,
                     category = category,
                     contentLength = null,
-                    mimeType = "video/mp4",
+                    mimeType = if (category == MediaCategory.IMAGE) "image/jpeg" else "video/mp4",
                     resolutionOptions = options,
                     defaultOption = defaultOption
                 )
+            } else {
+                throw IllegalStateException("Couldn't find video stream from this link. Please check if the video is public.")
             }
         }
 

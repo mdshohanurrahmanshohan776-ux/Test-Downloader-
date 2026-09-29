@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,7 +53,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shohan.pro.downloader.data.model.DownloadItem
-import com.shohan.pro.downloader.service.ClipboardMonitorService
 import com.shohan.pro.downloader.ui.MainViewModel
 import com.shohan.pro.downloader.ui.components.androidDrawableBackground
 import com.shohan.pro.downloader.ui.dialogs.DownloadDetailsDialog
@@ -95,11 +96,6 @@ class MainActivity : ComponentActivity() {
 
         handleIncomingIntent(intent)
 
-        // Start background clipboard monitor service so copied links anywhere pop up dialog immediately
-        try {
-            ClipboardMonitorService.start(this)
-        } catch (_: Exception) {}
-
         setContent {
             LinkDownloaderTheme {
                 MainAppContent(viewModel)
@@ -109,7 +105,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Automatically check clipboard for copied links as soon as user opens or resumes the app!
+        // Automatically scan clipboard when app opens and list copied links on Home Screen
         viewModel.checkClipboard(this)
     }
 
@@ -121,12 +117,22 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingIntent(intent: Intent?) {
         if (intent == null) return
-        if (Intent.ACTION_SEND == intent.action && "text/plain" == intent.type) {
-            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-            if (!sharedText.isNullOrBlank()) {
-                val extractedUrl = ClipboardHelper.extractUrl(sharedText) ?: sharedText.trim()
-                viewModel.analyzeUrl(extractedUrl)
+        val action = intent.action
+        var extractedUrl: String? = null
+
+        if (Intent.ACTION_SEND == action) {
+            val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+                ?: intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            if (!text.isNullOrBlank()) {
+                extractedUrl = ClipboardHelper.extractUrl(text) ?: text.trim()
             }
+        } else if (Intent.ACTION_VIEW == action && intent.data != null) {
+            extractedUrl = intent.dataString
+        }
+
+        if (!extractedUrl.isNullOrBlank()) {
+            viewModel.addCopiedLink(extractedUrl)
+            viewModel.analyzeUrl(extractedUrl)
         }
     }
 }
@@ -147,7 +153,8 @@ fun MainAppContent(viewModel: MainViewModel) {
     val showResolutionDialog by viewModel.showResolutionDialog.collectAsStateWithLifecycle()
     val selectedOption by viewModel.selectedOption.collectAsStateWithLifecycle()
     val customFileName by viewModel.customFileName.collectAsStateWithLifecycle()
-    val detectedClipboardUrl by viewModel.detectedClipboardUrl.collectAsStateWithLifecycle()
+    val copiedLinks by viewModel.copiedLinks.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
 
     val queueItems by viewModel.queueItems.collectAsStateWithLifecycle()
     val historyItems by viewModel.historyItems.collectAsStateWithLifecycle()
@@ -156,7 +163,14 @@ fun MainAppContent(viewModel: MainViewModel) {
 
     var selectedHistoryItemForDetails by remember { mutableStateOf<DownloadItem?>(null) }
 
-    // Entire app root background directly styled with drawable papi_king_bg
+    LaunchedEffect(errorMessage) {
+        if (!errorMessage.isNullOrBlank()) {
+            Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
+            viewModel.clearErrorMessage()
+        }
+    }
+
+    // Entire app root background styled with drawable papi_king_bg
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -175,14 +189,15 @@ fun MainAppContent(viewModel: MainViewModel) {
                 when (currentTab) {
                     NavigationTab.HOME -> {
                         HomeScreen(
-                            detectedClipboardUrl = detectedClipboardUrl,
+                            copiedLinks = copiedLinks,
                             isAnalyzing = isAnalyzing,
                             queueCount = queueItems.size,
                             historyCount = historyItems.size,
                             onAnalyzeUrl = { url -> viewModel.analyzeUrl(url) },
+                            onRemoveCopiedLink = { id -> viewModel.removeCopiedLink(id) },
+                            onClearAllCopiedLinks = { viewModel.clearAllCopiedLinks() },
                             onNavigateToQueue = { currentTab = NavigationTab.QUEUE },
-                            onNavigateToHistory = { currentTab = NavigationTab.HISTORY },
-                            onDismissClipboardBanner = { viewModel.dismissClipboardBanner() }
+                            onNavigateToHistory = { currentTab = NavigationTab.HISTORY }
                         )
                     }
 
@@ -297,7 +312,7 @@ fun MainAppContent(viewModel: MainViewModel) {
             }
         }
 
-        // Automatic Download Resolution Dialog (appears when link copied/analyzed)
+        // Automatic Download Resolution Dialog (appears when link analyzed or shared)
         if (showResolutionDialog && analyzedMedia != null) {
             DownloadResolutionDialog(
                 mediaInfo = analyzedMedia!!,

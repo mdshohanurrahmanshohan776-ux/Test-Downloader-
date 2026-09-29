@@ -11,6 +11,10 @@ class DownloadRepository(private val downloadDao: DownloadDao) {
     val historyDownloads: Flow<List<DownloadItem>> = downloadDao.getHistoryDownloads()
 
     suspend fun insertDownload(item: DownloadItem): Long {
+        val existingActive = downloadDao.getActiveDownloadByUrl(item.url)
+        if (existingActive != null) {
+            return existingActive.id
+        }
         val nextOrder = downloadDao.getMaxQueueOrder() + 1
         return downloadDao.insertDownload(item.copy(queueOrder = nextOrder))
     }

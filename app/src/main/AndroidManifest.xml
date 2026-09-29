@@ -7,7 +7,6 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".LinkDownloaderApp"
@@ -32,21 +31,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Receive shared links from other apps (YouTube, Facebook, Browser, etc.) -->
+            <!-- Receive shared links from ANY app (Facebook, Instagram, YouTube, TikTok, Browser, etc.) -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+            </intent-filter>
         </activity>
-
-        <!-- Floating Instant Download Dialog Activity (Pops up over YouTube, Facebook, Browser, etc.) -->
-        <activity
-            android:name=".ui.FloatingDownloadActivity"
-            android:exported="true"
-            android:theme="@style/Theme.TransparentDialog"
-            android:launchMode="singleInstance"
-            android:excludeFromRecents="true" />
 
         <!-- Foreground Download Service -->
         <service
@@ -54,26 +50,6 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
-
-        <!-- Background Clipboard Monitor Service -->
-        <service
-            android:name=".service.ClipboardMonitorService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
-        <!-- Accessibility Service to detect copied links from ANY app immediately -->
-        <service
-            android:name=".service.LinkDetectionAccessibilityService"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"

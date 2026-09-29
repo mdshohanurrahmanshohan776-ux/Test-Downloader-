@@ -29,6 +29,9 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE status = 'DOWNLOADING' LIMIT 1")
     suspend fun getCurrentDownloadingItem(): DownloadItem?
 
+    @Query("SELECT * FROM downloads WHERE url = :url AND status IN ('QUEUED', 'DOWNLOADING', 'PAUSED') LIMIT 1")
+    suspend fun getActiveDownloadByUrl(url: String): DownloadItem?
+
     @Query("SELECT COALESCE(MAX(queueOrder), 0) FROM downloads WHERE status IN ('QUEUED', 'DOWNLOADING', 'PAUSED')")
     suspend fun getMaxQueueOrder(): Int
 

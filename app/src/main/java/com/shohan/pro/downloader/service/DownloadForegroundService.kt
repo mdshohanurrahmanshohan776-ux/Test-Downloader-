@@ -189,11 +189,16 @@ class DownloadForegroundService : Service() {
 
             val isSocial = SocialMediaExtractor.isSocialMediaUrl(item.url)
             val effectiveUrl = if (isSocial) {
-                try {
-                    SocialMediaExtractor.extractMedia(item.url)?.directUrl ?: item.url
+                val extracted = try {
+                    SocialMediaExtractor.extractMedia(item.url)
                 } catch (_: Exception) {
-                    item.url
+                    null
                 }
+                if (extracted == null || extracted.directUrl.isBlank() || SocialMediaExtractor.isSocialMediaUrl(extracted.directUrl)) {
+                    repository.markFailed(id, "Couldn't find video")
+                    return
+                }
+                extracted.directUrl
             } else {
                 item.url
             }
@@ -222,6 +227,13 @@ class DownloadForegroundService : Service() {
             val responseBody = response.body
             if (!response.isSuccessful || responseBody == null) {
                 repository.markFailed(id, "HTTP Error: ${response.code}")
+                return
+            }
+
+            // Reject HTML content-type immediately before writing bytes
+            val contentType = (response.header("Content-Type") ?: "").lowercase(Locale.ROOT)
+            if (contentType.contains("text/html") || contentType.contains("application/xhtml")) {
+                repository.markFailed(id, "Couldn't find video (HTML page returned)")
                 return
             }
 
@@ -277,9 +289,9 @@ class DownloadForegroundService : Service() {
 
             if (coroutineContext.isActive) {
                 val isHtml = isHtmlPayload(targetFile)
-                if (isHtml && item.category == "VIDEO") {
+                if (isHtml) {
                     targetFile.delete()
-                    repository.markFailed(id, "Video stream protected. Please use direct video link.")
+                    repository.markFailed(id, "Couldn't find video (HTML content received)")
                 } else {
                     repository.markCompleted(id, targetFile.absolutePath, downloadedBytes)
                     showCompletionNotification(id, item.fileName, targetFile)
@@ -409,15 +421,15 @@ class DownloadForegroundService : Service() {
 
     private fun isHtmlPayload(file: File): Boolean {
         if (!file.exists() || file.length() == 0L) return true
-        if (file.length() > 500 * 1024) return false
         return try {
-            val headerBytes = ByteArray(1024)
+            val headerBytes = ByteArray(4096)
             file.inputStream().use { stream ->
                 val read = stream.read(headerBytes)
                 if (read > 0) {
                     val content = String(headerBytes, 0, read).lowercase(Locale.ROOT)
                     content.contains("<!doctype html") || content.contains("<html") ||
-                            content.contains("<head") || content.contains("<body")
+                            content.contains("<head") || content.contains("<body") ||
+                            content.contains("<script")
                 } else false
             }
         } catch (_: Exception) {
