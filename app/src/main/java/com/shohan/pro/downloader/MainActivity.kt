@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels {
         val app = application as LinkDownloaderApp
-        MainViewModel.Factory(app.repository)
+        MainViewModel.Factory(this, app.repository)
     }
 
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -105,8 +105,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Automatically scan clipboard when app opens and list copied links on Home Screen
         viewModel.checkClipboard(this)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            // Android 10-15 requires window focus to read clipboard safely
+            viewModel.checkClipboard(this)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

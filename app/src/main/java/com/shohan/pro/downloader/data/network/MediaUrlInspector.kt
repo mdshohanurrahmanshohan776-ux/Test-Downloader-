@@ -50,8 +50,6 @@ class MediaUrlInspector(
                     resolutionOptions = options,
                     defaultOption = defaultOption
                 )
-            } else {
-                throw IllegalStateException("Couldn't find video stream from this link. Please check if the video is public.")
             }
         }
 

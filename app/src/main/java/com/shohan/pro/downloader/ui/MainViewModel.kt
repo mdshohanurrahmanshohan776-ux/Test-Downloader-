@@ -13,6 +13,7 @@ import com.shohan.pro.downloader.data.network.MediaUrlInspector
 import com.shohan.pro.downloader.data.repository.DownloadRepository
 import com.shohan.pro.downloader.service.DownloadForegroundService
 import com.shohan.pro.downloader.util.ClipboardHelper
+import com.shohan.pro.downloader.util.CopiedLinksStorage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +34,7 @@ data class CopiedLinkItem(
 )
 
 class MainViewModel(
+    private val appContext: Context,
     private val repository: DownloadRepository,
     private val inspector: MediaUrlInspector = MediaUrlInspector()
 ) : ViewModel() {
@@ -52,7 +54,10 @@ class MainViewModel(
     private val _customFileName = MutableStateFlow("")
     val customFileName: StateFlow<String> = _customFileName.asStateFlow()
 
-    private val _copiedLinks = MutableStateFlow<List<CopiedLinkItem>>(emptyList())
+    // Persisted copied links list - loaded from SharedPreferences so it never vanishes
+    private val _copiedLinks = MutableStateFlow<List<CopiedLinkItem>>(
+        CopiedLinksStorage.loadLinks(appContext)
+    )
     val copiedLinks: StateFlow<List<CopiedLinkItem>> = _copiedLinks.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -91,7 +96,8 @@ class MainViewModel(
         val clean = rawUrl.trim()
         if (clean.isBlank()) return
         val current = _copiedLinks.value
-        if (current.any { it.url == clean }) return
+        // If already exists, move to top
+        val filtered = current.filterNot { it.url.equals(clean, ignoreCase = true) }
 
         val (platform, category) = detectPlatformAndCategory(clean)
         val newItem = CopiedLinkItem(
@@ -99,15 +105,20 @@ class MainViewModel(
             platformName = platform,
             category = category
         )
-        _copiedLinks.value = listOf(newItem) + current.take(15)
+        val updated = listOf(newItem) + filtered.take(19)
+        _copiedLinks.value = updated
+        CopiedLinksStorage.saveLinks(appContext, updated)
     }
 
     fun removeCopiedLink(id: String) {
-        _copiedLinks.value = _copiedLinks.value.filterNot { it.id == id }
+        val updated = _copiedLinks.value.filterNot { it.id == id }
+        _copiedLinks.value = updated
+        CopiedLinksStorage.saveLinks(appContext, updated)
     }
 
     fun clearAllCopiedLinks() {
         _copiedLinks.value = emptyList()
+        CopiedLinksStorage.saveLinks(appContext, emptyList())
     }
 
     fun clearErrorMessage() {
@@ -115,20 +126,45 @@ class MainViewModel(
     }
 
     fun analyzeUrl(url: String) {
-        if (url.isBlank()) return
+        val cleanUrl = url.trim()
+        if (cleanUrl.isBlank()) return
+
+        // Always add to persistent copied links shelf
+        addCopiedLink(cleanUrl)
+
         viewModelScope.launch {
             _isAnalyzing.value = true
             _errorMessage.value = null
             try {
-                val mediaInfo = inspector.inspectUrl(url)
+                val mediaInfo = inspector.inspectUrl(cleanUrl)
                 _analyzedMedia.value = mediaInfo
                 _selectedOption.value = mediaInfo.defaultOption
                 _customFileName.value = mediaInfo.suggestedFileName
                 _showResolutionDialog.value = true
             } catch (e: Exception) {
-                _analyzedMedia.value = null
-                _showResolutionDialog.value = false
-                _errorMessage.value = e.message ?: "ভিডিও খুঁজে পাওয়া যায়নি বা লিঙ্কটি সুরক্ষিত।"
+                // If anything fails, still display standard resolution dialog with direct link!
+                val (platform, category) = detectPlatformAndCategory(cleanUrl)
+                val fallbackOption = ResolutionOption(
+                    id = "standard",
+                    label = "Standard Download",
+                    resolution = "Default",
+                    estimatedSize = "Direct Stream",
+                    format = if (category == MediaCategory.VIDEO) "MP4" else "File",
+                    isRecommended = true
+                )
+                val fallbackInfo = AnalyzedMediaInfo(
+                    originalUrl = cleanUrl,
+                    suggestedFileName = "${platform}_${System.currentTimeMillis() % 10000}.${if (category == MediaCategory.VIDEO) "mp4" else "bin"}",
+                    category = category,
+                    contentLength = null,
+                    mimeType = if (category == MediaCategory.VIDEO) "video/mp4" else null,
+                    resolutionOptions = listOf(fallbackOption),
+                    defaultOption = fallbackOption
+                )
+                _analyzedMedia.value = fallbackInfo
+                _selectedOption.value = fallbackOption
+                _customFileName.value = fallbackInfo.suggestedFileName
+                _showResolutionDialog.value = true
             } finally {
                 _isAnalyzing.value = false
             }
@@ -277,10 +313,13 @@ class MainViewModel(
         }
     }
 
-    class Factory(private val repository: DownloadRepository) : ViewModelProvider.Factory {
+    class Factory(
+        private val context: Context,
+        private val repository: DownloadRepository
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return MainViewModel(repository) as T
+            return MainViewModel(context.applicationContext, repository) as T
         }
     }
 }

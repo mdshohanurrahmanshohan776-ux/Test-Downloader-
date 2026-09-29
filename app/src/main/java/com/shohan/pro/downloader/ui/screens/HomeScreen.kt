@@ -168,34 +168,34 @@ fun HomeScreen(
             }
         }
 
-        // Serial Copied Links Shelf (Shown ABOVE the empty input box)
-        if (copiedLinks.isNotEmpty()) {
-            item {
-                PapiKingCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("copied_links_card"),
-                    contentPadding = 14.dp
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ContentPaste,
-                                contentDescription = null,
-                                tint = NeonCyan,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "কপি করা লিংকসমূহ (${copiedLinks.size})",
-                                color = NeonCyan,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.weight(1f))
+        // Serial Copied Links Shelf (Always shown ABOVE the empty input box)
+        item {
+            PapiKingCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("copied_links_card"),
+                contentPadding = 14.dp
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentPaste,
+                            contentDescription = null,
+                            tint = NeonCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (copiedLinks.isNotEmpty()) "কপি করা লিংকসমূহ (${copiedLinks.size})" else "কপি করা লিংক",
+                            color = NeonCyan,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        if (copiedLinks.isNotEmpty()) {
                             Text(
                                 text = "Clear All",
                                 color = TextMuted,
@@ -205,9 +205,18 @@ fun HomeScreen(
                                     .padding(4.dp)
                             )
                         }
+                    }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
+                    if (copiedLinks.isEmpty()) {
+                        Text(
+                            text = "অন্য যেকোনো অ্যাপ থেকে ভিডিও, অডিও বা ফাইলের লিংক কপি করলে তা স্বয়ংক্রিয়ভাবে এখানে সিরিয়াল করে জমা হবে।",
+                            color = TextMuted,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    } else {
                         copiedLinks.forEachIndexed { index, item ->
                             CopiedLinkRowItem(
                                 index = index + 1,

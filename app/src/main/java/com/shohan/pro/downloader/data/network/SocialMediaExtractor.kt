@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.URI
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
@@ -20,8 +21,8 @@ data class ExtractedMedia(
 object SocialMediaExtractor {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -60,102 +61,52 @@ object SocialMediaExtractor {
         }
     }
 
-    private fun extractInstagram(url: String): ExtractedMedia? {
-        val shortcode = extractInstagramShortcode(url)
-
-        // 1. Try public Instagram embed endpoint first (it exposes direct CDN .mp4 without login)
-        if (shortcode != null) {
-            val embedUrl = "https://www.instagram.com/reel/$shortcode/embed/captioned/"
-            val embedHtml = fetchHtml(embedUrl, DESKTOP_UA) ?: fetchHtml(embedUrl, MOBILE_UA)
-            if (embedHtml != null) {
-                val videoUrl = findFirstRegex(embedHtml, listOf(
-                    "video_url\\\\\":\\\\\"(https:[^\"\\\\]+)",
-                    "\"video_url\":\"(https:[^\"]+)\"",
-                    "video_url\":\"(https:[^\"\\\\]+)",
-                    "<video[^>]*src=\"([^\"]+)\"",
-                    "\"src\":\"(https:[^\"\\\\]*\\.mp4[^\"]*)\""
-                ))?.let { unescapeJson(it) }
-
-                if (!videoUrl.isNullOrBlank() && !videoUrl.contains("instagram.com")) {
-                    return ExtractedMedia(
-                        directUrl = videoUrl,
-                        title = "Instagram_Reel_$shortcode",
-                        category = MediaCategory.VIDEO,
-                        extension = "mp4"
-                    )
-                }
-
-                // If not reel/video, check for photo
-                if (!url.contains("/reel/")) {
-                    val photoUrl = findFirstRegex(embedHtml, listOf(
-                        "\"display_url\":\"(https:[^\"]+)\"",
-                        "<img[^>]*class=\"EmbeddedMediaImage\"[^>]*src=\"([^\"]+)\"",
-                        "<meta property=\"og:image\" content=\"([^\"]+)\""
-                    ))?.let { unescapeJson(it) }
-
-                    if (!photoUrl.isNullOrBlank() && !photoUrl.contains("instagram.com")) {
-                        return ExtractedMedia(
-                            directUrl = photoUrl,
-                            title = "Instagram_Photo_$shortcode",
-                            category = MediaCategory.IMAGE,
-                            extension = "jpg"
-                        )
-                    }
-                }
-            }
-        }
-
-        // 2. Direct page fallback
-        try {
-            val html = fetchHtml(url, DESKTOP_UA) ?: fetchHtml(url, MOBILE_UA)
-            if (html != null) {
-                val videoUrl = findFirstRegex(html, listOf(
-                    "\"video_url\":\"(https:[^\"]+)\"",
-                    "\"video_versions\":\\[\\{\"url\":\"(https:[^\"]+)\"",
-                    "<meta property=\"og:video\" content=\"([^\"]+)\"",
-                    "<meta property=\"og:video:secure_url\" content=\"([^\"]+)\""
-                ))?.let { unescapeJson(it) }
-
-                if (!videoUrl.isNullOrBlank() && !videoUrl.contains("instagram.com")) {
-                    return ExtractedMedia(
-                        directUrl = videoUrl,
-                        title = "Instagram_Reel_${shortcode ?: extractIdFromUrl(url)}",
-                        category = MediaCategory.VIDEO,
-                        extension = "mp4"
-                    )
-                }
-
-                if (!url.contains("/reel/")) {
-                    val imageUrl = findFirstRegex(html, listOf(
-                        "\"display_url\":\"(https:[^\"]+)\"",
-                        "<meta property=\"og:image\" content=\"([^\"]+)\""
-                    ))?.let { unescapeJson(it) }
-
-                    if (!imageUrl.isNullOrBlank() && !imageUrl.contains("instagram.com")) {
-                        return ExtractedMedia(
-                            directUrl = imageUrl,
-                            title = "Instagram_Photo_${shortcode ?: extractIdFromUrl(url)}",
-                            category = MediaCategory.IMAGE,
-                            extension = "jpg",
-                            thumbnailUrl = imageUrl
-                        )
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-
-        // DO NOT fallback to page URL - return null so user knows extraction failed!
-        return null
-    }
-
     private fun extractFacebook(url: String): ExtractedMedia? {
         try {
             val resolvedUrl = followRedirects(url)
-            val id = extractFacebookId(resolvedUrl) ?: extractIdFromUrl(url)
+            val id = extractFacebookId(resolvedUrl) ?: extractFacebookId(url) ?: (System.currentTimeMillis() % 10000).toString()
 
+            // 1. Try public video plugin embed endpoint (yields direct fbcdn MP4 stream with audio!)
+            val encoded = URLEncoder.encode(resolvedUrl, "UTF-8")
+            val pluginUrl = "https://www.facebook.com/plugins/video.php?href=$encoded&_fb_noscript=1"
+            val pluginHtml = fetchHtml(pluginUrl, DESKTOP_UA)
+            if (pluginHtml != null) {
+                val unescaped = pluginHtml.replace("\\/", "/")
+                    .replace("\\u00253D", "=")
+                    .replace("&amp;", "&")
+                    .replace("\\u0026", "&")
+
+                val videoUrl = findFirstRegex(unescaped, listOf(
+                    "(https://video[^\"'\\s<>]+\\.mp4[^\"'\\s<>]*)",
+                    "\"playable_url\":\"(https:[^\"]+)\"",
+                    "\"browser_native_hd_url\":\"(https:[^\"]+)\"",
+                    "\"browser_native_sd_url\":\"(https:[^\"]+)\"",
+                    "\"hd_src\":\"(https:[^\"]+)\"",
+                    "\"sd_src\":\"(https:[^\"]+)\""
+                ))
+
+                if (!videoUrl.isNullOrBlank() && videoUrl.contains(".mp4")) {
+                    val cleanUrl = unescapeJson(videoUrl) ?: videoUrl
+                    val title = extractTitle(pluginHtml, "Facebook_Reel_$id")
+                    return ExtractedMedia(
+                        directUrl = cleanUrl,
+                        title = title,
+                        category = MediaCategory.VIDEO,
+                        extension = "mp4"
+                    )
+                }
+            }
+
+            // 2. Direct page scraping fallback
             val html = fetchHtml(resolvedUrl, DESKTOP_UA) ?: fetchHtml(resolvedUrl, MOBILE_UA)
             if (html != null) {
-                val videoUrl = findFirstRegex(html, listOf(
+                val unescaped = html.replace("\\/", "/")
+                    .replace("\\u00253D", "=")
+                    .replace("&amp;", "&")
+                    .replace("\\u0026", "&")
+
+                val videoUrl = findFirstRegex(unescaped, listOf(
+                    "(https://video[^\"'\\s<>]+\\.mp4[^\"'\\s<>]*)",
                     "\"browser_native_hd_url\":\"(https:[^\"]+)\"",
                     "\"browser_native_sd_url\":\"(https:[^\"]+)\"",
                     "\"playable_url_quality_hd\":\"(https:[^\"]+)\"",
@@ -163,16 +114,15 @@ object SocialMediaExtractor {
                     "\"hd_src\":\"(https:[^\"]+)\"",
                     "\"sd_src\":\"(https:[^\"]+)\"",
                     "<meta property=\"og:video\" content=\"([^\"]+)\"",
-                    "<meta property=\"og:video:secure_url\" content=\"([^\"]+)\"",
-                    "https:\\\\/\\\\/[^\"\\\\]*fbcdn\\.net\\\\/v\\\\/t[0-9.-]+\\\\/[^\"\\\\]*\\.mp4[^\"\\\\]*"
-                ))?.let { unescapeJson(it) }
+                    "<meta property=\"og:video:secure_url\" content=\"([^\"]+)\""
+                ))
 
-                if (!videoUrl.isNullOrBlank() && (videoUrl.contains("fbcdn.net") || videoUrl.contains(".mp4"))) {
-                    val title = extractTitle(html, "Facebook_Reel_$id")
+                if (!videoUrl.isNullOrBlank() && videoUrl.contains(".mp4")) {
+                    val cleanUrl = unescapeJson(videoUrl) ?: videoUrl
+                    val title = extractTitle(html, "Facebook_Video_$id")
                     val thumb = extractMetaProperty(html, "og:image")
-
                     return ExtractedMedia(
-                        directUrl = videoUrl,
+                        directUrl = cleanUrl,
                         title = title,
                         category = MediaCategory.VIDEO,
                         extension = "mp4",
@@ -182,7 +132,79 @@ object SocialMediaExtractor {
             }
         } catch (_: Exception) {}
 
-        // DO NOT fallback to page URL - return null so user knows extraction failed!
+        return null
+    }
+
+    private fun extractInstagram(url: String): ExtractedMedia? {
+        val shortcode = extractInstagramShortcode(url)
+
+        if (shortcode != null) {
+            val embedUrl = "https://www.instagram.com/reel/$shortcode/embed/captioned/"
+            val embedHtml = fetchHtml(embedUrl, DESKTOP_UA) ?: fetchHtml(embedUrl, MOBILE_UA)
+            if (embedHtml != null) {
+                val unescaped = embedHtml.replace("\\/", "/")
+                    .replace("\\u00253D", "=")
+                    .replace("&amp;", "&")
+                    .replace("\\u0026", "&")
+
+                val videoUrl = findFirstRegex(unescaped, listOf(
+                    "video_url\":\"(https:[^\"]+)\"",
+                    "\"video_url\":\"(https:[^\"]+)\"",
+                    "(https://[^\"]*cdninstagram\\.com[^\"\\s<>]+\\.mp4[^\"\\s<>]*)",
+                    "<video[^>]*src=\"([^\"]+)\"",
+                    "\"src\":\"(https:[^\"\\\\]*\\.mp4[^\"]*)\""
+                ))
+
+                if (!videoUrl.isNullOrBlank() && !videoUrl.contains("instagram.com")) {
+                    return ExtractedMedia(
+                        directUrl = unescapeJson(videoUrl) ?: videoUrl,
+                        title = "Instagram_Reel_$shortcode",
+                        category = MediaCategory.VIDEO,
+                        extension = "mp4"
+                    )
+                }
+
+                if (!url.contains("/reel/")) {
+                    val photoUrl = findFirstRegex(unescaped, listOf(
+                        "\"display_url\":\"(https:[^\"]+)\"",
+                        "<img[^>]*class=\"EmbeddedMediaImage\"[^>]*src=\"([^\"]+)\"",
+                        "<meta property=\"og:image\" content=\"([^\"]+)\""
+                    ))
+
+                    if (!photoUrl.isNullOrBlank() && !photoUrl.contains("instagram.com")) {
+                        return ExtractedMedia(
+                            directUrl = unescapeJson(photoUrl) ?: photoUrl,
+                            title = "Instagram_Photo_$shortcode",
+                            category = MediaCategory.IMAGE,
+                            extension = "jpg"
+                        )
+                    }
+                }
+            }
+        }
+
+        try {
+            val html = fetchHtml(url, DESKTOP_UA) ?: fetchHtml(url, MOBILE_UA)
+            if (html != null) {
+                val unescaped = html.replace("\\/", "/").replace("&amp;", "&")
+                val videoUrl = findFirstRegex(unescaped, listOf(
+                    "\"video_url\":\"(https:[^\"]+)\"",
+                    "(https://[^\"]*cdninstagram\\.com[^\"\\s<>]+\\.mp4[^\"\\s<>]*)",
+                    "<meta property=\"og:video\" content=\"([^\"]+)\"",
+                    "<meta property=\"og:video:secure_url\" content=\"([^\"]+)\""
+                ))
+
+                if (!videoUrl.isNullOrBlank() && !videoUrl.contains("instagram.com")) {
+                    return ExtractedMedia(
+                        directUrl = unescapeJson(videoUrl) ?: videoUrl,
+                        title = "Instagram_Reel_${shortcode ?: extractIdFromUrl(url)}",
+                        category = MediaCategory.VIDEO,
+                        extension = "mp4"
+                    )
+                }
+            }
+        } catch (_: Exception) {}
+
         return null
     }
 
@@ -190,16 +212,17 @@ object SocialMediaExtractor {
         try {
             val html = fetchHtml(url, MOBILE_UA)
             if (html != null) {
-                val videoUrl = findFirstRegex(html, listOf(
+                val unescaped = html.replace("\\/", "/").replace("&amp;", "&")
+                val videoUrl = findFirstRegex(unescaped, listOf(
                     "\"playAddr\":\"(https:[^\"]+)\"",
                     "<meta property=\"og:video\" content=\"([^\"]+)\"",
                     "<video[^>]*src=\"([^\"]+)\""
-                ))?.let { unescapeJson(it) }
+                ))
 
                 if (!videoUrl.isNullOrBlank() && !videoUrl.contains("tiktok.com")) {
                     val title = extractTitle(html, "TikTok_Video_${extractIdFromUrl(url)}")
                     return ExtractedMedia(
-                        directUrl = videoUrl,
+                        directUrl = unescapeJson(videoUrl) ?: videoUrl,
                         title = title,
                         category = MediaCategory.VIDEO,
                         extension = "mp4"
@@ -225,10 +248,7 @@ object SocialMediaExtractor {
             val html = fetchHtml(url, DESKTOP_UA)
             if (html != null) {
                 val metaVideo = extractMetaProperty(html, "og:video") ?: extractMetaProperty(html, "og:video:secure_url")
-                if (!metaVideo.isNullOrBlank() && !metaVideo.startsWith("http://") && !metaVideo.startsWith("https://")) {
-                    return null
-                }
-                if (!metaVideo.isNullOrBlank()) {
+                if (!metaVideo.isNullOrBlank() && (metaVideo.startsWith("http://") || metaVideo.startsWith("https://"))) {
                     val metaImage = extractMetaProperty(html, "og:image")
                     val title = extractTitle(html, "${prefix}_${extractIdFromUrl(url)}")
                     return ExtractedMedia(
