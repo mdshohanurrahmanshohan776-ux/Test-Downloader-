@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">LinkDownloader</string>
+    <string name="download_notification_channel_name">Download Manager</string>
+    <string name="download_notification_channel_desc">Notifications for ongoing and completed downloads</string>
+    <string name="clipboard_service_channel_name">Auto Clipboard Monitor</string>
+    <string name="clipboard_service_channel_desc">Monitors copied links from any app to instantly display the download dialog</string>
+    <string name="accessibility_service_desc">Instantly detects copied video, photo, document, and media links from any app to show download dialog.</string>
+</resources>

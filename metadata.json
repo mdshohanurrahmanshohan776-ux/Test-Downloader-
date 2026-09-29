@@ -1,0 +1,6 @@
+{
+  "name": "LinkDownloader",
+  "description": "Smart universal media & document downloader with instant clipboard detection, resolution selection, and background manager.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

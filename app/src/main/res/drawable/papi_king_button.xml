@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 🔹 Pressed state -->
+    <item android:state_pressed="true">
+        <layer-list>
+            <item>
+                <shape>
+                    <gradient
+                        android:startColor="#00800080"
+                        android:centerColor="#0000FFFF"
+                        android:endColor="#00800080"
+                        android:angle="90" />
+                    <corners
+                        android:topLeftRadius="7dp"
+                        android:topRightRadius="7dp"
+                        android:bottomLeftRadius="30dp"
+                        android:bottomRightRadius="30dp" />
+                </shape>
+            </item>
+            <item
+                android:left="0dp"
+                android:top="0dp"
+                android:right="0dp"
+                android:bottom="4dp">
+                <shape>
+                    <gradient
+                        android:startColor="#FFFF787B"
+                        android:centerColor="#FFFFB58D"
+                        android:endColor="#FFFFC192"
+                        android:angle="90" />
+                    <corners 
+                        android:radius="4dp" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="#FFFFFFFF" />
+                </shape>
+            </item>
+            <item
+                android:left="7dp"
+                android:top="3dp"
+                android:right="7dp"
+                android:bottom="15dp">
+                <shape>
+                    <gradient
+                        android:startColor="#41000000"
+                        android:centerColor="#41000000"
+                        android:endColor="#41000000"
+                        android:angle="90" />
+                    <corners 
+                        android:radius="4dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+
+    <!-- 🔹 Checked state -->
+    <item android:state_checked="true">
+        <layer-list>
+            <item>
+                <shape>
+                    <gradient
+                        android:startColor="#00800080"
+                        android:centerColor="#0000FFFF"
+                        android:endColor="#00800080"
+                        android:angle="90" />
+                    <corners 
+                        android:radius="10dp" />
+                </shape>
+            </item>
+            <item
+                android:left="0dp"
+                android:top="0dp"
+                android:right="0dp"
+                android:bottom="4dp">
+                <shape>
+                    <gradient
+                        android:startColor="#FF00FFFF"
+                        android:centerColor="#D0000000"
+                        android:endColor="#FF3E0000"
+                        android:angle="90" />
+                    <corners 
+                        android:radius="4dp" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="#FF00FF00" />
+                </shape>
+            </item>
+            <item
+                android:left="7dp"
+                android:top="3dp"
+                android:right="7dp"
+                android:bottom="15dp">
+                <shape>
+                    <gradient
+                        android:startColor="#77FF7900"
+                        android:centerColor="#6DAD0000"
+                        android:endColor="#4541FFFF"
+                        android:angle="90" />
+                    <corners 
+                        android:radius="4dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+
+    <!-- 🔹 Normal (default) state -->
+    <item>
+        <layer-list>
+            <item>
+                <shape>
+                    <gradient
+                        android:startColor="#00800080"
+                        android:centerColor="#0000FFFF"
+                        android:endColor="#00800080"
+                        android:angle="90" />
+                    <corners 
+                        android:radius="10dp" />
+                </shape>
+            </item>
+            <item
+                android:left="0dp"
+                android:top="0dp"
+                android:right="0dp"
+                android:bottom="4dp">
+                <shape>
+                    <gradient
+                        android:startColor="#97000000"
+                        android:centerColor="#66000000"
+                        android:endColor="#FF121817"
+                        android:angle="90" />
+                    <corners 
+                        android:radius="4dp" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="#ff02d9ff" />
+                </shape>
+            </item>
+            <item
+                android:left="7dp"
+                android:top="3dp"
+                android:right="7dp"
+                android:bottom="15dp">
+                <shape>
+                    <gradient
+                        android:startColor="#13FFFFFF"
+                        android:centerColor="#13FFFFFF"
+                        android:endColor="#13FFFFFF"
+                        android:angle="90" />
+                    <corners 
+                        android:radius="4dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+
+</selector>
