@@ -32,7 +32,7 @@ class MediaUrlInspector(
     suspend fun inspectUrl(url: String): AnalyzedMediaInfo = withContext(Dispatchers.IO) {
         val cleanUrl = url.trim()
 
-        // 1. Social media URL extraction (Facebook, Instagram, TikTok, etc.)
+        // 1. Social media URL extraction (Facebook, YouTube, Instagram, TikTok, etc.)
         if (SocialMediaExtractor.isSocialMediaUrl(cleanUrl)) {
             val extracted = SocialMediaExtractor.extractMedia(cleanUrl)
             if (extracted != null && extracted.streams.isNotEmpty()) {
@@ -45,28 +45,31 @@ class MediaUrlInspector(
                     val sizeFormatted = if (stream.bytes != null && stream.bytes > 0) {
                         formatBytes(stream.bytes)
                     } else {
-                        "Direct Stream"
+                        "Ready to Download (${extracted.extension.uppercase()})"
                     }
+                    val isAudio = stream.label.contains("Audio", ignoreCase = true)
                     ResolutionOption(
                         id = "stream_$index",
                         label = stream.label,
                         resolution = stream.resolution,
                         estimatedSize = sizeFormatted,
-                        format = extracted.extension.uppercase(),
+                        format = if (isAudio) "MP3" else extracted.extension.uppercase(),
                         isRecommended = stream.isRecommended,
                         directStreamUrl = stream.url,
-                        exactBytes = stream.bytes
+                        exactBytes = stream.bytes,
+                        isAudioOnly = isAudio
                     )
                 }.toMutableList()
 
-                // Add Audio option for video media
-                if (category == MediaCategory.VIDEO) {
+                // Add Audio option for video media if not already present
+                val hasAudioOption = options.any { it.isAudioOnly }
+                if (category == MediaCategory.VIDEO && !hasAudioOption) {
                     val audioBytes = if (contentLength != null && contentLength > 0) (contentLength * 0.15).toLong() else null
                     val audioSize = if (audioBytes != null) formatBytes(audioBytes) else "Audio Track"
                     options.add(
                         ResolutionOption(
                             id = "audio_only",
-                            label = "Audio Only",
+                            label = "Audio Only (MP3)",
                             resolution = "Original Audio",
                             estimatedSize = audioSize,
                             format = "MP3",
@@ -126,7 +129,7 @@ class MediaUrlInspector(
         val verifiedSizeStr = if (finalContentLength != null && finalContentLength > 0) {
             formatBytes(finalContentLength)
         } else {
-            "Direct Stream"
+            "Ready to Download"
         }
 
         val options = mutableListOf<ResolutionOption>()
@@ -134,7 +137,7 @@ class MediaUrlInspector(
             ResolutionOption(
                 id = "original_file",
                 label = "Original File",
-                resolution = if (finalContentLength != null && finalContentLength > 0) "Server Verified" else "Direct Stream",
+                resolution = if (finalContentLength != null && finalContentLength > 0) "Server Verified" else "Standard Quality",
                 estimatedSize = verifiedSizeStr,
                 format = ext,
                 isRecommended = true,
@@ -149,7 +152,7 @@ class MediaUrlInspector(
             options.add(
                 ResolutionOption(
                     id = "audio_only",
-                    label = "Audio Only",
+                    label = "Audio Only (MP3)",
                     resolution = "Original Audio",
                     estimatedSize = audioSize,
                     format = "MP3",
@@ -177,18 +180,36 @@ class MediaUrlInspector(
     private fun detectCategory(url: String, mimeType: String?): MediaCategory {
         val lowerUrl = url.lowercase(Locale.ROOT)
 
+        // 1. Social video websites - NEVER treat as documents or pdf!
+        if (lowerUrl.contains("youtube.com") || lowerUrl.contains("youtu.be") ||
+            lowerUrl.contains("facebook.com") || lowerUrl.contains("fb.watch") ||
+            lowerUrl.contains("instagram.com") || lowerUrl.contains("tiktok.com") ||
+            lowerUrl.contains("twitter.com") || lowerUrl.contains("x.com") ||
+            lowerUrl.contains("vimeo.com") || lowerUrl.contains("dailymotion.com")
+        ) {
+            return MediaCategory.VIDEO
+        }
+
+        // 2. MIME type detection (strict, ignoring text/html)
         if (mimeType != null) {
             if (mimeType.startsWith("video/")) return MediaCategory.VIDEO
             if (mimeType.startsWith("image/")) return MediaCategory.IMAGE
             if (mimeType.startsWith("audio/")) return MediaCategory.AUDIO
-            if (mimeType.contains("pdf") || mimeType.contains("document") || mimeType.contains("text/")) return MediaCategory.DOCUMENT
-            if (mimeType.contains("zip") || mimeType.contains("tar") || mimeType.contains("rar") || mimeType.contains("octet-stream")) {
+            if (mimeType.contains("application/pdf") || mimeType.contains("application/msword") ||
+                mimeType.contains("application/vnd.openxmlformats") || mimeType.contains("application/vnd.ms-") ||
+                mimeType.contains("text/plain") || mimeType.contains("text/csv")
+            ) {
+                return MediaCategory.DOCUMENT
+            }
+            if (mimeType.contains("zip") || mimeType.contains("tar") || mimeType.contains("rar") ||
+                mimeType.contains("application/octet-stream")
+            ) {
                 if (lowerUrl.endsWith(".apk")) return MediaCategory.OTHER
                 return MediaCategory.ARCHIVE
             }
         }
 
-        // URL extension detection
+        // 3. File extension detection
         if (lowerUrl.contains(".mp4") || lowerUrl.contains(".mkv") || lowerUrl.contains(".webm") ||
             lowerUrl.contains(".mov") || lowerUrl.contains(".avi") || lowerUrl.contains(".flv") ||
             lowerUrl.contains(".m3u8") || lowerUrl.contains("video")
@@ -225,6 +246,20 @@ class MediaUrlInspector(
 
     private fun extractFileNameFromUrl(url: String, category: MediaCategory): String {
         return try {
+            val lower = url.lowercase(Locale.ROOT)
+            if (lower.contains("youtube.com") || lower.contains("youtu.be")) {
+                return "YouTube_Video_${System.currentTimeMillis() % 10000}.mp4"
+            }
+            if (lower.contains("facebook.com") || lower.contains("fb.watch")) {
+                return "Facebook_Video_${System.currentTimeMillis() % 10000}.mp4"
+            }
+            if (lower.contains("instagram.com")) {
+                return "Instagram_Video_${System.currentTimeMillis() % 10000}.mp4"
+            }
+            if (lower.contains("tiktok.com")) {
+                return "TikTok_Video_${System.currentTimeMillis() % 10000}.mp4"
+            }
+
             val uri = URI(url)
             val path = uri.path ?: ""
             val rawName = path.substringAfterLast('/', "")

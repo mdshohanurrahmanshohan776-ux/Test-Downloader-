@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import java.net.URI
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -33,6 +34,7 @@ object SocialMediaExtractor {
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 
     private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -55,6 +57,9 @@ object SocialMediaExtractor {
             lower.contains("facebook.com") || lower.contains("fb.watch") -> {
                 extractFacebook(cleanUrl)
             }
+            lower.contains("youtube.com") || lower.contains("youtu.be") -> {
+                extractYouTube(cleanUrl)
+            }
             lower.contains("instagram.com") -> {
                 extractInstagram(cleanUrl)
             }
@@ -70,22 +75,48 @@ object SocialMediaExtractor {
         }
     }
 
-    fun getContentLength(url: String): Long? {
-        return try {
-            val req = Request.Builder()
+    fun getContentLength(url: String, referer: String? = null): Long? {
+        try {
+            // 1. Try GET with Range: bytes=0-0 to get Content-Range without downloading whole file
+            val rangeBuilder = Request.Builder()
+                .url(url)
+                .header("User-Agent", DESKTOP_UA)
+                .header("Range", "bytes=0-0")
+                .header("Accept", "*/*")
+            if (referer != null) {
+                rangeBuilder.header("Referer", referer)
+            }
+            client.newCall(rangeBuilder.build()).execute().use { resp ->
+                if (resp.isSuccessful || resp.code == 206) {
+                    val cr = resp.header("Content-Range")
+                    if (cr != null && cr.contains('/')) {
+                        val total = cr.substringAfterLast('/').trim().toLongOrNull()
+                        if (total != null && total > 0) return total
+                    }
+                    val clen = resp.header("Content-Length")?.toLongOrNull()
+                    if (clen != null && clen > 1) return clen
+                }
+            }
+        } catch (_: Exception) {}
+
+        try {
+            // 2. Fallback to standard HEAD request
+            val headBuilder = Request.Builder()
                 .url(url)
                 .head()
                 .header("User-Agent", DESKTOP_UA)
-                .header("Referer", "https://www.facebook.com/")
-                .build()
-            client.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    resp.header("Content-Length")?.toLongOrNull()
-                } else null
+            if (referer != null) {
+                headBuilder.header("Referer", referer)
             }
-        } catch (_: Exception) {
-            null
-        }
+            client.newCall(headBuilder.build()).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val clen = resp.header("Content-Length")?.toLongOrNull()
+                    if (clen != null && clen > 0) return clen
+                }
+            }
+        } catch (_: Exception) {}
+
+        return null
     }
 
     private fun extractFacebook(url: String): ExtractedMedia? {
@@ -102,11 +133,11 @@ object SocialMediaExtractor {
                     .replace("&amp;", "&")
                     .replace("\\u0026", "&")
 
-                val pattern = Pattern.compile("(https://video[^\"'\\s<>]+\\.mp4[^\"'\\s<>]*)")
+                val pattern = Pattern.compile("https://video[^\\s\"'<>]+?\\.mp4\\?[^\\s\"'<>]+?(?=(?:https://video|\"|'|\\s|<|>|$))")
                 val matcher = pattern.matcher(unescaped)
                 val rawStreams = mutableListOf<String>()
                 while (matcher.find()) {
-                    val streamUrl = matcher.group(1)
+                    val streamUrl = matcher.group(0)
                     if (!streamUrl.isNullOrBlank() && !rawStreams.contains(streamUrl)) {
                         rawStreams.add(streamUrl)
                     }
@@ -117,7 +148,7 @@ object SocialMediaExtractor {
                     val hdUrl = rawStreams.firstOrNull { it.contains("720p") || it.contains("hd") } ?: rawStreams.first()
                     val sdUrl = rawStreams.firstOrNull { it != hdUrl }
 
-                    val hdBytes = getContentLength(hdUrl)
+                    val hdBytes = getContentLength(hdUrl, "https://www.facebook.com/")
                     streams.add(
                         ExtractedStream(
                             label = "HD Quality (720p)",
@@ -129,7 +160,7 @@ object SocialMediaExtractor {
                     )
 
                     if (sdUrl != null) {
-                        val sdBytes = getContentLength(sdUrl)
+                        val sdBytes = getContentLength(sdUrl, "https://www.facebook.com/")
                         streams.add(
                             ExtractedStream(
                                 label = "SD Quality (360p)",
@@ -172,7 +203,7 @@ object SocialMediaExtractor {
 
                 if (!videoUrl.isNullOrBlank() && videoUrl.contains(".mp4")) {
                     val cleanUrl = unescapeJson(videoUrl) ?: videoUrl
-                    val bytes = getContentLength(cleanUrl)
+                    val bytes = getContentLength(cleanUrl, "https://www.facebook.com/")
                     val title = extractTitle(html, "Facebook_Video_$id")
                     val thumb = extractMetaProperty(html, "og:image")
                     return ExtractedMedia(
@@ -198,8 +229,168 @@ object SocialMediaExtractor {
         return null
     }
 
+    private fun extractYouTube(url: String): ExtractedMedia? {
+        val videoId = extractYouTubeId(url) ?: return null
+        val instances = listOf(
+            "https://invidious.f5.si",
+            "https://inv.nadeko.net",
+            "https://yt.chocolatemoo53.com",
+            "https://invidious.nerdvpn.de",
+            "https://invidious.tiekoetter.com"
+        )
+
+        for (base in instances) {
+            try {
+                val apiUrl = "$base/api/v1/videos/$videoId"
+                val jsonStr = fetchHtml(apiUrl, DESKTOP_UA) ?: continue
+                val json = JSONObject(jsonStr)
+                val title = cleanTitle(json.optString("title", "YouTube_Video_$videoId"))
+                val formatStreams = json.optJSONArray("formatStreams")
+                val adaptiveFormats = json.optJSONArray("adaptiveFormats")
+
+                val streams = mutableListOf<ExtractedStream>()
+                val addedQualities = mutableSetOf<String>()
+
+                // 1. Progressive MP4 streams (Audio + Video combined)
+                if (formatStreams != null && formatStreams.length() > 0) {
+                    for (i in 0 until formatStreams.length()) {
+                        val s = formatStreams.getJSONObject(i)
+                        val sUrl = s.optString("url")
+                        val container = s.optString("container", "mp4").lowercase()
+                        if (sUrl.isNotBlank() && (container == "mp4" || s.optString("type").contains("mp4"))) {
+                            val quality = s.optString("qualityLabel").ifBlank { s.optString("resolution", "360p") }
+                            if (!addedQualities.contains(quality)) {
+                                addedQualities.add(quality)
+                                val clen = s.optString("clen").toLongOrNull() ?: getContentLength(sUrl)
+                                streams.add(
+                                    ExtractedStream(
+                                        label = "$quality Video (MP4)",
+                                        url = sUrl,
+                                        resolution = quality,
+                                        bytes = clen,
+                                        isRecommended = streams.isEmpty()
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 2. Adaptive video streams (1080p, 720p, 480p, 360p)
+                if (adaptiveFormats != null && adaptiveFormats.length() > 0) {
+                    for (i in 0 until adaptiveFormats.length()) {
+                        val s = adaptiveFormats.getJSONObject(i)
+                        val sType = s.optString("type", "").lowercase()
+                        val sUrl = s.optString("url")
+                        val container = s.optString("container", "").lowercase()
+                        if (sUrl.isNotBlank() && (sType.startsWith("video/mp4") || container == "mp4" || sType.contains("video"))) {
+                            val quality = s.optString("qualityLabel").ifBlank { s.optString("resolution", "") }
+                            if (quality.isNotBlank() && !addedQualities.contains(quality)) {
+                                addedQualities.add(quality)
+                                val clen = s.optString("clen").toLongOrNull() ?: getContentLength(sUrl)
+                                streams.add(
+                                    ExtractedStream(
+                                        label = "$quality Video (MP4)",
+                                        url = sUrl,
+                                        resolution = quality,
+                                        bytes = clen,
+                                        isRecommended = streams.isEmpty()
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 3. Audio stream (MP3/M4A)
+                if (adaptiveFormats != null && adaptiveFormats.length() > 0) {
+                    for (i in 0 until adaptiveFormats.length()) {
+                        val s = adaptiveFormats.getJSONObject(i)
+                        val sType = s.optString("type", "").lowercase()
+                        val sUrl = s.optString("url")
+                        if (sUrl.isNotBlank() && (sType.contains("audio/mp4") || sType.contains("m4a") || sType.contains("audio"))) {
+                            val clen = s.optString("clen").toLongOrNull() ?: getContentLength(sUrl)
+                            streams.add(
+                                ExtractedStream(
+                                    label = "Audio Only (MP3)",
+                                    url = sUrl,
+                                    resolution = "Audio Track",
+                                    bytes = clen,
+                                    isRecommended = false
+                                )
+                            )
+                            break
+                        }
+                    }
+                }
+
+                if (streams.isNotEmpty()) {
+                    // Ensure the highest resolution video stream is recommended by default
+                    val firstVideoStream = streams.firstOrNull { !it.label.contains("Audio") }
+                    val finalStreams = streams.map { stream ->
+                        if (firstVideoStream != null && stream == firstVideoStream) {
+                            stream.copy(isRecommended = true)
+                        } else if (firstVideoStream != null) {
+                            stream.copy(isRecommended = false)
+                        } else stream
+                    }
+
+                    return ExtractedMedia(
+                        directUrl = (firstVideoStream ?: finalStreams.first()).url,
+                        title = title,
+                        category = MediaCategory.VIDEO,
+                        extension = "mp4",
+                        streams = finalStreams
+                    )
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Direct fallback with oEmbed
+        return try {
+            val encoded = URLEncoder.encode(url, "UTF-8")
+            val oembedUrl = "https://www.youtube.com/oembed?url=$encoded&format=json"
+            val jsonStr = fetchHtml(oembedUrl, DESKTOP_UA)
+            val title = if (jsonStr != null) {
+                cleanTitle(JSONObject(jsonStr).optString("title", "YouTube_Video_$videoId"))
+            } else "YouTube_Video_$videoId"
+
+            ExtractedMedia(
+                directUrl = url,
+                title = title,
+                category = MediaCategory.VIDEO,
+                extension = "mp4",
+                streams = listOf(
+                    ExtractedStream(
+                        label = "720p HD Video (MP4)",
+                        url = url,
+                        resolution = "720p HD",
+                        bytes = null,
+                        isRecommended = true
+                    ),
+                    ExtractedStream(
+                        label = "Audio Only (MP3)",
+                        url = url,
+                        resolution = "Audio Track",
+                        bytes = null,
+                        isRecommended = false
+                    )
+                )
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extractYouTubeId(url: String): String? {
+        val pattern = Pattern.compile("(?:v=|youtu\\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
+        val matcher = pattern.matcher(url)
+        return if (matcher.find()) matcher.group(1) else null
+    }
+
     private fun extractInstagram(url: String): ExtractedMedia? {
-        val shortcode = extractInstagramShortcode(url)
+        val resolvedUrl = followRedirects(url)
+        val shortcode = extractInstagramShortcode(resolvedUrl) ?: extractInstagramShortcode(url)
 
         if (shortcode != null) {
             val embedUrl = "https://www.instagram.com/reel/$shortcode/embed/captioned/"
@@ -213,6 +404,8 @@ object SocialMediaExtractor {
                 val videoUrl = findFirstRegex(unescaped, listOf(
                     "video_url\":\"(https:[^\"]+)\"",
                     "\"video_url\":\"(https:[^\"]+)\"",
+                    "<meta\\s+property=\"og:video\"\\s+content=\"([^\"]+)\"",
+                    "<meta\\s+property=\"og:video:secure_url\"\\s+content=\"([^\"]+)\"",
                     "(https://[^\"]*cdninstagram\\.com[^\"\\s<>]+\\.mp4[^\"\\s<>]*)",
                     "<video[^>]*src=\"([^\"]+)\"",
                     "\"src\":\"(https:[^\"\\\\]*\\.mp4[^\"]*)\""
@@ -220,7 +413,7 @@ object SocialMediaExtractor {
 
                 if (!videoUrl.isNullOrBlank() && !videoUrl.contains("instagram.com")) {
                     val clean = unescapeJson(videoUrl) ?: videoUrl
-                    val bytes = getContentLength(clean)
+                    val bytes = getContentLength(clean, "https://www.instagram.com/")
                     return ExtractedMedia(
                         directUrl = clean,
                         title = "Instagram_Reel_$shortcode",
@@ -228,9 +421,9 @@ object SocialMediaExtractor {
                         extension = "mp4",
                         streams = listOf(
                             ExtractedStream(
-                                label = "Original Reel",
+                                label = "HD Video (MP4)",
                                 url = clean,
-                                resolution = "HD Quality",
+                                resolution = "1080p / 720p HD",
                                 bytes = bytes,
                                 isRecommended = true
                             )
@@ -247,7 +440,7 @@ object SocialMediaExtractor {
 
                     if (!photoUrl.isNullOrBlank() && !photoUrl.contains("instagram.com")) {
                         val clean = unescapeJson(photoUrl) ?: photoUrl
-                        val bytes = getContentLength(clean)
+                        val bytes = getContentLength(clean, "https://www.instagram.com/")
                         return ExtractedMedia(
                             directUrl = clean,
                             title = "Instagram_Photo_$shortcode",
@@ -273,19 +466,23 @@ object SocialMediaExtractor {
 
     private fun extractTikTok(url: String): ExtractedMedia? {
         try {
-            val html = fetchHtml(url, MOBILE_UA)
+            val resolvedUrl = followRedirects(url)
+            val html = fetchHtml(resolvedUrl, MOBILE_UA) ?: fetchHtml(resolvedUrl, DESKTOP_UA)
             if (html != null) {
-                val unescaped = html.replace("\\/", "/").replace("&amp;", "&")
+                val unescaped = html.replace("\\/", "/").replace("&amp;", "&").replace("\\u0026", "&")
                 val videoUrl = findFirstRegex(unescaped, listOf(
                     "\"playAddr\":\"(https:[^\"]+)\"",
+                    "\"downloadAddr\":\"(https:[^\"]+)\"",
                     "<meta property=\"og:video\" content=\"([^\"]+)\"",
-                    "<video[^>]*src=\"([^\"]+)\""
+                    "<meta property=\"og:video:url\" content=\"([^\"]+)\"",
+                    "<video[^>]*src=\"([^\"]+)\"",
+                    "\"src\":\"(https:[^\"]+\\.mp4[^\"]*)\""
                 ))
 
                 if (!videoUrl.isNullOrBlank() && !videoUrl.contains("tiktok.com")) {
                     val clean = unescapeJson(videoUrl) ?: videoUrl
-                    val bytes = getContentLength(clean)
-                    val title = extractTitle(html, "TikTok_Video_${extractIdFromUrl(url)}")
+                    val bytes = getContentLength(clean, "https://www.tiktok.com/")
+                    val title = extractTitle(html, "TikTok_Video_${extractIdFromUrl(resolvedUrl)}")
                     return ExtractedMedia(
                         directUrl = clean,
                         title = title,
@@ -293,7 +490,7 @@ object SocialMediaExtractor {
                         extension = "mp4",
                         streams = listOf(
                             ExtractedStream(
-                                label = "Original Video",
+                                label = "HD Video (MP4)",
                                 url = clean,
                                 resolution = "HD Quality",
                                 bytes = bytes,
@@ -334,7 +531,7 @@ object SocialMediaExtractor {
                         thumbnailUrl = metaImage,
                         streams = listOf(
                             ExtractedStream(
-                                label = "Original Video",
+                                label = "HD Video (MP4)",
                                 url = metaVideo,
                                 resolution = "Original Quality",
                                 bytes = bytes,
@@ -369,7 +566,7 @@ object SocialMediaExtractor {
             val request = Request.Builder()
                 .url(url)
                 .header("User-Agent", userAgent)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,application/json")
                 .header("Accept-Language", "en-US,en;q=0.9")
                 .build()
             client.newCall(request).execute().use { response ->

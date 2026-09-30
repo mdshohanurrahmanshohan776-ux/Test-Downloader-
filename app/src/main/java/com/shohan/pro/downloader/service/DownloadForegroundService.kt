@@ -19,7 +19,6 @@ import com.shohan.pro.downloader.data.model.DownloadStatus
 import com.shohan.pro.downloader.data.network.SocialMediaExtractor
 import com.shohan.pro.downloader.data.repository.DownloadRepository
 import com.shohan.pro.downloader.util.FileOpener
-import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,10 +28,12 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
 import java.io.RandomAccessFile
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 
 class DownloadForegroundService : Service() {
 
@@ -45,7 +46,9 @@ class DownloadForegroundService : Service() {
     private lateinit var notificationManager: NotificationManager
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 
     companion object {
@@ -91,6 +94,10 @@ class DownloadForegroundService : Service() {
         val dao = AppDatabase.getDatabase(this).downloadDao()
         repository = DownloadRepository(dao)
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        try {
+            notificationManager.cancel(1001)
+            notificationManager.cancel(FOREGROUND_NOTIFICATION_ID)
+        } catch (_: Exception) {}
         createNotificationChannel()
     }
 
@@ -111,7 +118,7 @@ class DownloadForegroundService : Service() {
                         repository.updateStatus(item.id, DownloadStatus.PAUSED)
                     }
                 }
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                dismissForegroundNotification()
                 stopSelf()
             }
             ACTION_CANCEL_DOWNLOAD -> {
@@ -154,14 +161,9 @@ class DownloadForegroundService : Service() {
         if (currentDownloadJob?.isActive == true) return
 
         currentDownloadJob = serviceScope.launch {
-            // Find next queued item
             val nextItem = repository.getNextQueuedItem()
             if (nextItem == null) {
-                // Queue is empty or complete!
-                try {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    notificationManager.cancel(FOREGROUND_NOTIFICATION_ID)
-                } catch (_: Exception) {}
+                dismissForegroundNotification()
                 stopSelf()
                 return@launch
             }
@@ -169,8 +171,7 @@ class DownloadForegroundService : Service() {
             currentItem = nextItem
             downloadSingleItem(nextItem)
 
-            kotlinx.coroutines.delay(400)
-            // Loop to the next item in the queue
+            kotlinx.coroutines.delay(300)
             processNextInQueue()
         }
     }
@@ -198,7 +199,8 @@ class DownloadForegroundService : Service() {
                     null
                 }
                 if (extracted == null || extracted.directUrl.isBlank() || SocialMediaExtractor.isSocialMediaUrl(extracted.directUrl)) {
-                    repository.markFailed(id, "Couldn't find video")
+                    val msg = "Video stream not found or link expired"
+                    handleDownloadFailure(id, item.fileName, msg)
                     return
                 }
                 extracted.directUrl
@@ -217,7 +219,16 @@ class DownloadForegroundService : Service() {
 
             val requestBuilder = Request.Builder()
                 .url(effectiveUrl)
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .header("Accept", "*/*")
+
+            if (effectiveUrl.contains("fbcdn.net")) {
+                requestBuilder.header("Referer", "https://www.facebook.com/")
+            } else if (effectiveUrl.contains("googlevideo.com") || effectiveUrl.contains("youtube.com")) {
+                requestBuilder.header("Referer", "https://www.youtube.com/")
+            } else {
+                requestBuilder.header("Referer", "https://www.google.com/")
+            }
 
             if (targetFile.exists() && targetFile.length() > 0 && downloadedBytes > 0) {
                 downloadedBytes = targetFile.length()
@@ -229,14 +240,13 @@ class DownloadForegroundService : Service() {
             val response = client.newCall(requestBuilder.build()).execute()
             val responseBody = response.body
             if (!response.isSuccessful || responseBody == null) {
-                repository.markFailed(id, "HTTP Error: ${response.code}")
+                handleDownloadFailure(id, item.fileName, "HTTP ${response.code}")
                 return
             }
 
-            // Reject HTML content-type immediately before writing bytes
             val contentType = (response.header("Content-Type") ?: "").lowercase(Locale.ROOT)
             if (contentType.contains("text/html") || contentType.contains("application/xhtml")) {
-                repository.markFailed(id, "Couldn't find video (HTML page returned)")
+                handleDownloadFailure(id, item.fileName, "Login required or private video")
                 return
             }
 
@@ -294,7 +304,7 @@ class DownloadForegroundService : Service() {
                 val isHtml = isHtmlPayload(targetFile)
                 if (isHtml) {
                     targetFile.delete()
-                    repository.markFailed(id, "Couldn't find video (HTML content received)")
+                    handleDownloadFailure(id, item.fileName, "Login required or private video")
                 } else {
                     repository.markCompleted(id, targetFile.absolutePath, downloadedBytes)
                     showCompletionNotification(id, item.fileName, targetFile)
@@ -303,10 +313,51 @@ class DownloadForegroundService : Service() {
 
         } catch (e: CancellationException) {
             repository.updateProgress(id, downloadedBytes, item.totalBytes, DownloadStatus.PAUSED.name, "Paused")
+            dismissForegroundNotification()
         } catch (e: Exception) {
-            repository.markFailed(id, e.localizedMessage ?: "Network error")
+            handleDownloadFailure(id, item.fileName, e.localizedMessage ?: "Network error")
         } finally {
             currentItem = null
+        }
+    }
+
+    private fun handleDownloadFailure(id: Long, fileName: String, error: String) {
+        dismissForegroundNotification()
+        serviceScope.launch {
+            repository.markFailed(id, error)
+        }
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Download Failed ⚠️")
+            .setContentText("$fileName: $error")
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+
+        try {
+            notificationManager.notify((COMPLETE_NOTIFICATION_ID_BASE + id).toInt(), notification)
+        } catch (_: SecurityException) {}
+    }
+
+    private fun dismissForegroundNotification() {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            notificationManager.cancel(FOREGROUND_NOTIFICATION_ID)
+            notificationManager.cancel(1001)
+        } catch (_: Exception) {}
+    }
+
+    private fun isHtmlPayload(file: File): Boolean {
+        if (!file.exists() || file.length() == 0L) return false
+        if (file.length() > 500 * 1024) return false
+        return try {
+            val bytes = ByteArray(512)
+            FileInputStream(file).use { it.read(bytes) }
+            val sample = String(bytes).lowercase()
+            sample.contains("<!doctype html") || sample.contains("<html") || sample.contains("<head")
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -355,11 +406,7 @@ class DownloadForegroundService : Service() {
     }
 
     private fun showCompletionNotification(id: Long, fileName: String, file: File) {
-        // Immediately dismiss the foreground progress bar notification
-        try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            notificationManager.cancel(FOREGROUND_NOTIFICATION_ID)
-        } catch (_: Exception) {}
+        dismissForegroundNotification()
 
         val openIntent = FileOpener.createOpenFileIntent(this, file)
         val pendingIntent = if (openIntent != null) {
@@ -390,8 +437,7 @@ class DownloadForegroundService : Service() {
 
         try {
             notificationManager.notify((COMPLETE_NOTIFICATION_ID_BASE + id).toInt(), notification)
-        } catch (_: SecurityException) {
-        }
+        } catch (_: SecurityException) {}
     }
 
     private fun createNotificationChannel() {
@@ -428,28 +474,11 @@ class DownloadForegroundService : Service() {
         }
     }
 
-    private fun isHtmlPayload(file: File): Boolean {
-        if (!file.exists() || file.length() == 0L) return true
-        return try {
-            val headerBytes = ByteArray(4096)
-            file.inputStream().use { stream ->
-                val read = stream.read(headerBytes)
-                if (read > 0) {
-                    val content = String(headerBytes, 0, read).lowercase(Locale.ROOT)
-                    content.contains("<!doctype html") || content.contains("<html") ||
-                            content.contains("<head") || content.contains("<body") ||
-                            content.contains("<script")
-                } else false
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
-
     override fun onDestroy() {
         super.onDestroy()
         currentDownloadJob?.cancel()
+        dismissForegroundNotification()
     }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }
