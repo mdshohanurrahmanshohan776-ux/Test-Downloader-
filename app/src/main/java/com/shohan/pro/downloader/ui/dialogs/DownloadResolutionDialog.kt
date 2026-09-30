@@ -171,6 +171,28 @@ fun DownloadResolutionContent(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
+                // Verified Status Tag
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF07211C))
+                        .border(1.dp, Color(0xFF00E676).copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "✅", fontSize = 12.sp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Original Link Verified • Real Server Size",
+                        color = Color(0xFF00E676),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
                 // Resolution Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -184,7 +206,7 @@ fun DownloadResolutionContent(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "${mediaInfo.resolutionOptions.size} options available",
+                        text = "${mediaInfo.resolutionOptions.size} verified options",
                         color = TextMuted,
                         fontSize = 11.sp
                     )

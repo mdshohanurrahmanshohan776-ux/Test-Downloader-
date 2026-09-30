@@ -23,8 +23,8 @@ data class AnalyzedMediaInfo(
 
 class MediaUrlInspector(
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 ) {
@@ -32,20 +32,59 @@ class MediaUrlInspector(
     suspend fun inspectUrl(url: String): AnalyzedMediaInfo = withContext(Dispatchers.IO) {
         val cleanUrl = url.trim()
 
-        // 1. If it's a social media URL (Facebook, Instagram, TikTok, etc.), extract video details
+        // 1. Social media URL extraction (Facebook, Instagram, TikTok, etc.)
         if (SocialMediaExtractor.isSocialMediaUrl(cleanUrl)) {
             val extracted = SocialMediaExtractor.extractMedia(cleanUrl)
-            if (extracted != null) {
+            if (extracted != null && extracted.streams.isNotEmpty()) {
                 val category = extracted.category
                 val fileName = "${extracted.title}.${extracted.extension}"
-                val options = generateResolutionOptions(category, null)
+                val primaryStream = extracted.streams.first()
+                val contentLength = primaryStream.bytes
+
+                val options = extracted.streams.mapIndexed { index, stream ->
+                    val sizeFormatted = if (stream.bytes != null && stream.bytes > 0) {
+                        formatBytes(stream.bytes)
+                    } else {
+                        "Direct Stream"
+                    }
+                    ResolutionOption(
+                        id = "stream_$index",
+                        label = stream.label,
+                        resolution = stream.resolution,
+                        estimatedSize = sizeFormatted,
+                        format = extracted.extension.uppercase(),
+                        isRecommended = stream.isRecommended,
+                        directStreamUrl = stream.url,
+                        exactBytes = stream.bytes
+                    )
+                }.toMutableList()
+
+                // Add Audio option for video media
+                if (category == MediaCategory.VIDEO) {
+                    val audioBytes = if (contentLength != null && contentLength > 0) (contentLength * 0.15).toLong() else null
+                    val audioSize = if (audioBytes != null) formatBytes(audioBytes) else "Audio Track"
+                    options.add(
+                        ResolutionOption(
+                            id = "audio_only",
+                            label = "Audio Only",
+                            resolution = "Original Audio",
+                            estimatedSize = audioSize,
+                            format = "MP3",
+                            isRecommended = false,
+                            isAudioOnly = true,
+                            directStreamUrl = primaryStream.url,
+                            exactBytes = audioBytes
+                        )
+                    )
+                }
+
                 val defaultOption = options.firstOrNull { it.isRecommended } ?: options.first()
 
                 return@withContext AnalyzedMediaInfo(
-                    originalUrl = extracted.directUrl,
+                    originalUrl = primaryStream.url,
                     suggestedFileName = fileName,
                     category = category,
-                    contentLength = null,
+                    contentLength = contentLength,
                     mimeType = if (category == MediaCategory.IMAGE) "image/jpeg" else "video/mp4",
                     resolutionOptions = options,
                     defaultOption = defaultOption
@@ -53,6 +92,7 @@ class MediaUrlInspector(
             }
         }
 
+        // 2. Direct server verification via HEAD request
         var mimeType: String? = null
         var contentLength: Long? = null
         var headerFileName: String? = null
@@ -61,12 +101,13 @@ class MediaUrlInspector(
             val request = Request.Builder()
                 .url(cleanUrl)
                 .head()
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .header("Accept", "*/*")
                 .build()
 
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
-                    mimeType = response.header("Content-Type")?.lowercase()
+                    mimeType = response.header("Content-Type")?.lowercase(Locale.ROOT)
                     contentLength = response.header("Content-Length")?.toLongOrNull()
                     val disposition = response.header("Content-Disposition")
                     if (disposition != null && disposition.contains("filename=")) {
@@ -75,20 +116,58 @@ class MediaUrlInspector(
                     }
                 }
             }
-        } catch (_: Exception) {
-            // Network fallback to pattern matching
-        }
+        } catch (_: Exception) {}
 
         val category = detectCategory(cleanUrl, mimeType)
         val fileName = headerFileName ?: extractFileNameFromUrl(cleanUrl, category)
-        val options = generateResolutionOptions(category, contentLength)
-        val defaultOption = options.firstOrNull { it.isRecommended } ?: options.first()
+        val ext = fileName.substringAfterLast('.', "bin").uppercase()
+
+        val finalContentLength = contentLength
+        val verifiedSizeStr = if (finalContentLength != null && finalContentLength > 0) {
+            formatBytes(finalContentLength)
+        } else {
+            "Direct Stream"
+        }
+
+        val options = mutableListOf<ResolutionOption>()
+        options.add(
+            ResolutionOption(
+                id = "original_file",
+                label = "Original File",
+                resolution = if (finalContentLength != null && finalContentLength > 0) "Server Verified" else "Direct Stream",
+                estimatedSize = verifiedSizeStr,
+                format = ext,
+                isRecommended = true,
+                directStreamUrl = cleanUrl,
+                exactBytes = finalContentLength
+            )
+        )
+
+        if (category == MediaCategory.VIDEO) {
+            val audioBytes = if (finalContentLength != null && finalContentLength > 0) (finalContentLength * 0.15).toLong() else null
+            val audioSize = if (audioBytes != null) formatBytes(audioBytes) else "Audio Track"
+            options.add(
+                ResolutionOption(
+                    id = "audio_only",
+                    label = "Audio Only",
+                    resolution = "Original Audio",
+                    estimatedSize = audioSize,
+                    format = "MP3",
+                    isRecommended = false,
+                    isAudioOnly = true,
+                    directStreamUrl = cleanUrl,
+                    exactBytes = audioBytes
+                )
+            )
+        }
+
+        val defaultOption = options.first()
 
         AnalyzedMediaInfo(
             originalUrl = cleanUrl,
             suggestedFileName = fileName,
             category = category,
-            contentLength = contentLength,
+            contentLength = finalContentLength,
             mimeType = mimeType,
             resolutionOptions = options,
             defaultOption = defaultOption
@@ -98,61 +177,45 @@ class MediaUrlInspector(
     private fun detectCategory(url: String, mimeType: String?): MediaCategory {
         val lowerUrl = url.lowercase(Locale.ROOT)
 
-        // Known Video Platforms & Extensions ALWAYS have priority over mimeType
-        if (lowerUrl.contains("youtube.com") || lowerUrl.contains("youtu.be") ||
-            lowerUrl.contains("tiktok.com") || lowerUrl.contains("facebook.com") ||
-            lowerUrl.contains("fb.watch") || lowerUrl.contains("instagram.com/reel") ||
-            lowerUrl.contains("instagram.com/p/") || lowerUrl.contains("twitter.com") ||
-            lowerUrl.contains("x.com") || lowerUrl.contains("vimeo.com") ||
-            lowerUrl.contains("dailymotion.com") || lowerUrl.endsWith(".mp4") ||
-            lowerUrl.endsWith(".mkv") || lowerUrl.endsWith(".webm") ||
-            lowerUrl.endsWith(".mov") || lowerUrl.endsWith(".avi") ||
-            lowerUrl.endsWith(".m4v") || lowerUrl.endsWith(".flv") ||
-            lowerUrl.contains(".mp4?") || lowerUrl.contains(".m3u8")
+        if (mimeType != null) {
+            if (mimeType.startsWith("video/")) return MediaCategory.VIDEO
+            if (mimeType.startsWith("image/")) return MediaCategory.IMAGE
+            if (mimeType.startsWith("audio/")) return MediaCategory.AUDIO
+            if (mimeType.contains("pdf") || mimeType.contains("document") || mimeType.contains("text/")) return MediaCategory.DOCUMENT
+            if (mimeType.contains("zip") || mimeType.contains("tar") || mimeType.contains("rar") || mimeType.contains("octet-stream")) {
+                if (lowerUrl.endsWith(".apk")) return MediaCategory.OTHER
+                return MediaCategory.ARCHIVE
+            }
+        }
+
+        // URL extension detection
+        if (lowerUrl.contains(".mp4") || lowerUrl.contains(".mkv") || lowerUrl.contains(".webm") ||
+            lowerUrl.contains(".mov") || lowerUrl.contains(".avi") || lowerUrl.contains(".flv") ||
+            lowerUrl.contains(".m3u8") || lowerUrl.contains("video")
         ) {
             return MediaCategory.VIDEO
         }
 
-        if (mimeType != null) {
-            when {
-                mimeType.startsWith("video/") -> return MediaCategory.VIDEO
-                mimeType.startsWith("image/") -> return MediaCategory.IMAGE
-                mimeType.startsWith("audio/") -> return MediaCategory.AUDIO
-                mimeType.contains("pdf") || mimeType.contains("msword") ||
-                        mimeType.contains("officedocument") || mimeType == "application/pdf" -> return MediaCategory.DOCUMENT
-                mimeType.contains("zip") || mimeType.contains("compressed") ||
-                        mimeType.contains("tar") || mimeType.contains("rar") -> return MediaCategory.ARCHIVE
-            }
-        }
-
-        // Images
-        if (lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg") || lowerUrl.endsWith(".png") ||
-            lowerUrl.endsWith(".webp") || lowerUrl.endsWith(".gif") || lowerUrl.endsWith(".svg") ||
-            lowerUrl.endsWith(".bmp") || lowerUrl.contains("unsplash.com") || lowerUrl.contains("imgur.com") ||
-            lowerUrl.contains("pinterest.com")
+        if (lowerUrl.contains(".jpg") || lowerUrl.contains(".jpeg") || lowerUrl.contains(".png") ||
+            lowerUrl.contains(".webp") || lowerUrl.contains(".gif") || lowerUrl.contains(".svg")
         ) {
             return MediaCategory.IMAGE
         }
 
-        // Audio
-        if (lowerUrl.endsWith(".mp3") || lowerUrl.endsWith(".wav") || lowerUrl.endsWith(".m4a") ||
-            lowerUrl.endsWith(".aac") || lowerUrl.endsWith(".flac") || lowerUrl.endsWith(".ogg") ||
-            lowerUrl.contains("soundcloud.com") || lowerUrl.contains("spotify.com")
+        if (lowerUrl.contains(".mp3") || lowerUrl.contains(".m4a") || lowerUrl.contains(".wav") ||
+            lowerUrl.contains(".aac") || lowerUrl.contains(".flac") || lowerUrl.contains(".ogg")
         ) {
             return MediaCategory.AUDIO
         }
 
-        // Documents
-        if (lowerUrl.endsWith(".pdf") || lowerUrl.endsWith(".docx") || lowerUrl.endsWith(".doc") ||
-            lowerUrl.endsWith(".xlsx") || lowerUrl.endsWith(".xls") || lowerUrl.endsWith(".pptx") ||
-            lowerUrl.endsWith(".ppt") || lowerUrl.endsWith(".txt") || lowerUrl.endsWith(".csv")
+        if (lowerUrl.contains(".pdf") || lowerUrl.contains(".doc") || lowerUrl.contains(".docx") ||
+            lowerUrl.contains(".txt") || lowerUrl.contains(".xlsx") || lowerUrl.contains(".pptx")
         ) {
             return MediaCategory.DOCUMENT
         }
 
-        // Archives
-        if (lowerUrl.endsWith(".zip") || lowerUrl.endsWith(".rar") || lowerUrl.endsWith(".7z") ||
-            lowerUrl.endsWith(".apk") || lowerUrl.endsWith(".tar.gz")
+        if (lowerUrl.contains(".zip") || lowerUrl.contains(".rar") || lowerUrl.contains(".7z") ||
+            lowerUrl.contains(".apk") || lowerUrl.contains(".tar")
         ) {
             return MediaCategory.ARCHIVE
         }
@@ -170,7 +233,7 @@ class MediaUrlInspector(
             } else ""
 
             if (decodedName.contains('.') && decodedName.length > 3) {
-                decodedName
+                decodedName.substringBefore('?').substringBefore('&')
             } else {
                 val host = uri.host?.replace("www.", "")?.substringBefore('.') ?: "media"
                 val timestamp = System.currentTimeMillis() % 100000
@@ -180,7 +243,7 @@ class MediaUrlInspector(
                     MediaCategory.DOCUMENT -> "pdf"
                     MediaCategory.AUDIO -> "mp3"
                     MediaCategory.ARCHIVE -> "zip"
-                    MediaCategory.OTHER -> "dat"
+                    MediaCategory.OTHER -> "bin"
                 }
                 "${host}_download_$timestamp.$ext"
             }
@@ -195,170 +258,8 @@ class MediaUrlInspector(
         }
     }
 
-    private fun generateResolutionOptions(category: MediaCategory, totalBytes: Long?): List<ResolutionOption> {
-        val baseSize = totalBytes ?: (35L * 1024L * 1024L)
-        val sizeFormatted = formatBytes(baseSize)
-
-        return when (category) {
-            MediaCategory.VIDEO -> listOf(
-                ResolutionOption(
-                    id = "res_4k",
-                    label = "4K Ultra HD",
-                    resolution = "3840x2160 (2160p)",
-                    estimatedSize = formatBytes((baseSize * 3.8).toLong()),
-                    format = "MP4 • 60 FPS",
-                    isRecommended = false
-                ),
-                ResolutionOption(
-                    id = "res_2k",
-                    label = "2K Quad HD",
-                    resolution = "2560x1440 (1440p)",
-                    estimatedSize = formatBytes((baseSize * 2.2).toLong()),
-                    format = "MP4 • High Bitrate",
-                    isRecommended = false
-                ),
-                ResolutionOption(
-                    id = "res_1080p",
-                    label = "Full HD (1080p)",
-                    resolution = "1920x1080 (1080p)",
-                    estimatedSize = sizeFormatted,
-                    format = "MP4 • Recommended",
-                    isRecommended = true
-                ),
-                ResolutionOption(
-                    id = "res_720p",
-                    label = "HD Ready (720p)",
-                    resolution = "1280x720 (720p)",
-                    estimatedSize = formatBytes((baseSize * 0.55).toLong()),
-                    format = "MP4 • Balanced",
-                    isRecommended = false
-                ),
-                ResolutionOption(
-                    id = "res_480p",
-                    label = "SD Quality (480p)",
-                    resolution = "854x480 (480p)",
-                    estimatedSize = formatBytes((baseSize * 0.3).toLong()),
-                    format = "MP4 • Fast",
-                    isRecommended = false
-                ),
-                ResolutionOption(
-                    id = "res_360p",
-                    label = "Data Saver (360p)",
-                    resolution = "640x360 (360p)",
-                    estimatedSize = formatBytes((baseSize * 0.18).toLong()),
-                    format = "MP4 • Low Data",
-                    isRecommended = false
-                ),
-                ResolutionOption(
-                    id = "res_audio_mp3",
-                    label = "Extract Audio Only (MP3)",
-                    resolution = "320 kbps Stereo",
-                    estimatedSize = formatBytes((baseSize * 0.12).coerceAtLeast(3.0 * 1024.0 * 1024.0).toLong()),
-                    format = "MP3 Audio",
-                    isRecommended = false,
-                    isAudioOnly = true
-                )
-            )
-
-            MediaCategory.IMAGE -> listOf(
-                ResolutionOption(
-                    id = "img_original",
-                    label = "Original Quality (Best)",
-                    resolution = "Source Resolution",
-                    estimatedSize = if (totalBytes != null) formatBytes(totalBytes) else "Full Size",
-                    format = "Source Format",
-                    isRecommended = true
-                ),
-                ResolutionOption(
-                    id = "img_1080p",
-                    label = "High Resolution (1080p)",
-                    resolution = "1920x1080",
-                    estimatedSize = "~2.5 MB",
-                    format = "JPG / PNG",
-                    isRecommended = false
-                ),
-                ResolutionOption(
-                    id = "img_720p",
-                    label = "Medium Quality (720p)",
-                    resolution = "1280x720",
-                    estimatedSize = "~1.1 MB",
-                    format = "WebP / JPG",
-                    isRecommended = false
-                ),
-                ResolutionOption(
-                    id = "img_thumb",
-                    label = "Compact Thumbnail",
-                    resolution = "480x480",
-                    estimatedSize = "~350 KB",
-                    format = "WebP",
-                    isRecommended = false
-                )
-            )
-
-            MediaCategory.DOCUMENT -> listOf(
-                ResolutionOption(
-                    id = "doc_original",
-                    label = "Original Document",
-                    resolution = "Full Resolution",
-                    estimatedSize = if (totalBytes != null) formatBytes(totalBytes) else "Source Size",
-                    format = "Source Format",
-                    isRecommended = true
-                ),
-                ResolutionOption(
-                    id = "doc_stream",
-                    label = "Fast Stream Download",
-                    resolution = "Multi-threaded Chunked",
-                    estimatedSize = if (totalBytes != null) formatBytes(totalBytes) else "Optimized",
-                    format = "Direct Stream",
-                    isRecommended = false
-                )
-            )
-
-            MediaCategory.AUDIO -> listOf(
-                ResolutionOption(
-                    id = "audio_320",
-                    label = "Ultra High Quality (320 kbps)",
-                    resolution = "Crystal Clear Audio",
-                    estimatedSize = if (totalBytes != null) formatBytes(totalBytes) else "~8.5 MB",
-                    format = "MP3 • 320 kbps",
-                    isRecommended = true,
-                    isAudioOnly = true
-                ),
-                ResolutionOption(
-                    id = "audio_192",
-                    label = "Standard Quality (192 kbps)",
-                    resolution = "CD Quality Sound",
-                    estimatedSize = "~5.2 MB",
-                    format = "MP3 • 192 kbps",
-                    isRecommended = false,
-                    isAudioOnly = true
-                ),
-                ResolutionOption(
-                    id = "audio_128",
-                    label = "Data Saver (128 kbps)",
-                    resolution = "Voice & Compact",
-                    estimatedSize = "~3.4 MB",
-                    format = "MP3 • 128 kbps",
-                    isRecommended = false,
-                    isAudioOnly = true
-                )
-            )
-
-            else -> listOf(
-                ResolutionOption(
-                    id = "file_original",
-                    label = "Original File",
-                    resolution = "Standard",
-                    estimatedSize = if (totalBytes != null) formatBytes(totalBytes) else "Unknown",
-                    format = "Direct File",
-                    isRecommended = true
-                )
-            )
-        }
-    }
-
     private fun formatBytes(bytes: Long): String {
-        if (bytes <= 0) return "Unknown"
+        if (bytes <= 0) return "0 KB"
         val kb = bytes / 1024.0
         val mb = kb / 1024.0
         val gb = mb / 1024.0

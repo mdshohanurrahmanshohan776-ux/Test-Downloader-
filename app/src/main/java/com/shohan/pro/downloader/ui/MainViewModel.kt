@@ -187,16 +187,20 @@ class MainViewModel(
     fun startDownloadNow(context: Context) {
         val info = _analyzedMedia.value ?: return
         val option = _selectedOption.value ?: info.defaultOption
-        val name = _customFileName.value.ifBlank { info.suggestedFileName }
+        val targetUrl = option.directStreamUrl ?: info.originalUrl
+        val targetBytes = option.exactBytes ?: info.contentLength ?: 0L
+        val ext = if (option.isAudioOnly) "mp3" else if (info.category == MediaCategory.IMAGE) "jpg" else "mp4"
+        val baseName = _customFileName.value.ifBlank { info.suggestedFileName }.substringBeforeLast('.')
+        val finalFileName = "$baseName.$ext"
 
         viewModelScope.launch {
             val item = DownloadItem(
-                url = info.originalUrl,
-                fileName = name,
-                category = info.category.name,
+                url = targetUrl,
+                fileName = finalFileName,
+                category = if (option.isAudioOnly) MediaCategory.AUDIO.name else info.category.name,
                 resolution = "${option.label} (${option.resolution})",
                 format = option.format,
-                totalBytes = info.contentLength ?: 0L,
+                totalBytes = targetBytes,
                 status = DownloadStatus.QUEUED.name
             )
             repository.insertDownload(item)
@@ -208,16 +212,20 @@ class MainViewModel(
     fun addToQueue(context: Context) {
         val info = _analyzedMedia.value ?: return
         val option = _selectedOption.value ?: info.defaultOption
-        val name = _customFileName.value.ifBlank { info.suggestedFileName }
+        val targetUrl = option.directStreamUrl ?: info.originalUrl
+        val targetBytes = option.exactBytes ?: info.contentLength ?: 0L
+        val ext = if (option.isAudioOnly) "mp3" else if (info.category == MediaCategory.IMAGE) "jpg" else "mp4"
+        val baseName = _customFileName.value.ifBlank { info.suggestedFileName }.substringBeforeLast('.')
+        val finalFileName = "$baseName.$ext"
 
         viewModelScope.launch {
             val item = DownloadItem(
-                url = info.originalUrl,
-                fileName = name,
-                category = info.category.name,
+                url = targetUrl,
+                fileName = finalFileName,
+                category = if (option.isAudioOnly) MediaCategory.AUDIO.name else info.category.name,
                 resolution = "${option.label} (${option.resolution})",
                 format = option.format,
-                totalBytes = info.contentLength ?: 0L,
+                totalBytes = targetBytes,
                 status = DownloadStatus.QUEUED.name
             )
             repository.insertDownload(item)

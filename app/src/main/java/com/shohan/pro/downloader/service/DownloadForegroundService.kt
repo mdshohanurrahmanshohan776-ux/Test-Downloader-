@@ -158,7 +158,10 @@ class DownloadForegroundService : Service() {
             val nextItem = repository.getNextQueuedItem()
             if (nextItem == null) {
                 // Queue is empty or complete!
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    notificationManager.cancel(FOREGROUND_NOTIFICATION_ID)
+                } catch (_: Exception) {}
                 stopSelf()
                 return@launch
             }
@@ -352,6 +355,12 @@ class DownloadForegroundService : Service() {
     }
 
     private fun showCompletionNotification(id: Long, fileName: String, file: File) {
+        // Immediately dismiss the foreground progress bar notification
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            notificationManager.cancel(FOREGROUND_NOTIFICATION_ID)
+        } catch (_: Exception) {}
+
         val openIntent = FileOpener.createOpenFileIntent(this, file)
         val pendingIntent = if (openIntent != null) {
             PendingIntent.getActivity(
@@ -376,7 +385,7 @@ class DownloadForegroundService : Service() {
             .setContentText("$fileName is ready to open")
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
 
         try {

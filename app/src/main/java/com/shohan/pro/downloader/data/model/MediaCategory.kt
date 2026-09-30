@@ -25,5 +25,7 @@ data class ResolutionOption(
     val estimatedSize: String,
     val format: String,
     val isRecommended: Boolean = false,
-    val isAudioOnly: Boolean = false
+    val isAudioOnly: Boolean = false,
+    val directStreamUrl: String? = null,
+    val exactBytes: Long? = null
 )
